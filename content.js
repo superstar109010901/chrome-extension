@@ -1436,8 +1436,9 @@
     const messagesChanged = currentHash !== lastMessageHash;
     const messages = extractMessages();
     
-    // CRITICAL: Check the last div with css-* class (like css-3c89uo) and all its children for "Sent:"
-    // If "Sent:" is found, we sent it - don't reply, skip this chat
+    // CRITICAL: Check DOM order of "Received:" and "Sent:" indicators
+    // If first "Received:" is above first "Sent:" → they sent most recent → we should reply
+    // If first "Sent:" is above first "Received:" → we sent most recent → don't reply, skip chat
     function checkLastMessageForSentIndicator() {
       try {
         const main = document.querySelector('main, [role="main"]');
@@ -1446,56 +1447,66 @@
           return 'not_found'; // Can't determine, go to next chat
         }
         
-        // Find all divs with css-* classes (like css-3c89uo, css-17ertmd, etc.)
-        // Match pattern: class contains "css-" followed by alphanumeric characters
-        const allDivs = main.querySelectorAll('div[class*="css-"]');
+        // Find all elements containing "Received:" or "Sent:" text
+        const allElements = main.querySelectorAll('*');
+        let firstReceivedElement = null;
+        let firstSentElement = null;
+        let firstReceivedIndex = -1;
+        let firstSentIndex = -1;
         
-        if (allDivs.length === 0) {
-          console.log('[AI Assistant] ⚠️ Could not find any divs with css-* classes');
-          return 'not_found'; // Can't determine, go to next chat
-        }
-        
-        // Get the last div with css-* class (most recent message)
-        const lastCssDiv = allDivs[allDivs.length - 1];
-        if (!lastCssDiv) {
-          console.log('[AI Assistant] ⚠️ Could not find last css-* div');
-          return 'not_found'; // Can't determine, go to next chat
-        }
-        
-        console.log(`[AI Assistant] 🔍 Checking last css-* div (class: "${lastCssDiv.className}") for "Sent:" indicator`);
-        
-        // Check ALL children of the last div (not just direct children, but all descendants)
-        const allChildren = lastCssDiv.querySelectorAll('*'); // All descendant elements
-        let foundSent = false;
-        
-        // Check the last div itself first
-        const lastDivText = (lastCssDiv.textContent || '').trim().toLowerCase();
-        if (lastDivText.includes('sent:')) {
-          foundSent = true;
-          console.log('[AI Assistant] 📍 Found "Sent:" in last css-* div itself');
-        }
-        
-        // Check all children/descendants
-        for (const child of allChildren) {
-          const childText = (child.textContent || '').trim().toLowerCase();
-          // Check if this child's text is exactly "Sent:" or starts with "Sent:"
-          if (childText === 'sent:' || childText.startsWith('sent:')) {
-            foundSent = true;
-            console.log(`[AI Assistant] 📍 Found "Sent:" in child element (tag: ${child.tagName}, class: ${child.className}): "${childText}"`);
+        // Search through all elements to find first "Received:" and first "Sent:"
+        for (let i = 0; i < allElements.length; i++) {
+          const el = allElements[i];
+          const text = (el.textContent || '').trim();
+          
+          // Check for "Received:" (case-sensitive as shown in DOM)
+          if (!firstReceivedElement && (text === 'Received:' || text.startsWith('Received:'))) {
+            firstReceivedElement = el;
+            firstReceivedIndex = i;
+          }
+          
+          // Check for "Sent:" (case-sensitive as shown in DOM)
+          if (!firstSentElement && (text === 'Sent:' || text.startsWith('Sent:'))) {
+            firstSentElement = el;
+            firstSentIndex = i;
+          }
+          
+          // If we found both, we can stop searching
+          if (firstReceivedElement && firstSentElement) {
             break;
           }
         }
         
-        if (foundSent) {
-          console.log('[AI Assistant] 🚫 "Sent:" indicator found in last css-* div or its children - we sent this message');
-          return 'sent_found'; // We sent it, don't reply, skip this chat
+        // If we found both indicators, compare their DOM order
+        if (firstReceivedElement && firstSentElement) {
+          if (firstReceivedIndex < firstSentIndex) {
+            // "Received:" appears first (above) → they sent most recent → we should reply
+            console.log(`[AI Assistant] ✅ First "Received:" (index ${firstReceivedIndex}) is above first "Sent:" (index ${firstSentIndex}) - they sent most recent, we can reply`);
+            return 'sent_not_found'; // They sent it, we can proceed
+          } else {
+            // "Sent:" appears first (above) → we sent most recent → don't reply
+            console.log(`[AI Assistant] 🚫 First "Sent:" (index ${firstSentIndex}) is above first "Received:" (index ${firstReceivedIndex}) - we sent most recent, skipping chat`);
+            return 'sent_found'; // We sent it, don't reply, skip this chat
+          }
         }
         
-        // "Sent:" not found in last div or its children - they sent it, we can reply
-        console.log('[AI Assistant] ✅ "Sent:" not found in last css-* div or its children - they sent it, we can reply');
-        return 'sent_not_found'; // They sent it, we can proceed
+        // If we only found "Sent:" but not "Received:", we likely sent the most recent
+        if (firstSentElement && !firstReceivedElement) {
+          console.log('[AI Assistant] 🚫 Found "Sent:" but no "Received:" - we likely sent most recent, skipping chat');
+          return 'sent_found'; // We sent it, don't reply
+        }
+        
+        // If we only found "Received:" but not "Sent:", they likely sent the most recent
+        if (firstReceivedElement && !firstSentElement) {
+          console.log('[AI Assistant] ✅ Found "Received:" but no "Sent:" - they likely sent most recent, we can reply');
+          return 'sent_not_found'; // They sent it, we can proceed
+        }
+        
+        // Neither found - can't determine
+        console.log('[AI Assistant] ⚠️ Could not find "Received:" or "Sent:" indicators in DOM');
+        return 'not_found'; // Can't determine, go to next chat
       } catch (err) {
-        console.warn('[AI Assistant] Error checking last css-* div for "Sent:" indicator:', err);
+        console.warn('[AI Assistant] Error checking DOM order of "Received:" and "Sent:" indicators:', err);
         return 'not_found'; // Error, go to next chat
       }
     }
