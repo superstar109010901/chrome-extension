@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Match.com AI Reply Assistant</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      width: 340px;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      margin: 0;
+      background: #fafafa;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 5px 0;
+      color: #333;
+    }
+    .subtitle {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 15px;
+    }
+    .status {
+      padding: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 8px;
+      font-size: 12px;
+      color: white;
+      margin-bottom: 15px;
+      text-align: center;
+    }
+    .status.inactive {
+      background: #ccc;
+    }
+    
+    /* Section */
+    .section {
+      background: white;
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    /* Toggle Switch */
+    .toggle-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+    }
+    .toggle-label {
+      font-size: 13px;
+      color: #444;
+    }
+    .toggle-sublabel {
+      font-size: 11px;
+      color: #888;
+      margin-top: 2px;
+    }
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #ccc;
+      transition: 0.3s;
+      border-radius: 24px;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.3s;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .toggle input:checked + .toggle-slider {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .toggle input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+    }
+    
+    /* Input Fields */
+    .input-group {
+      margin-bottom: 12px;
+    }
+    .input-group:last-child {
+      margin-bottom: 0;
+    }
+    .input-label {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 5px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .input-field {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 13px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .input-field:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    .input-field::placeholder {
+      color: #aaa;
+    }
+    
+    /* Delay Input */
+    .delay-input {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .delay-input input {
+      width: 70px;
+      text-align: center;
+    }
+    .delay-unit {
+      font-size: 12px;
+      color: #666;
+    }
+    
+    /* Save Button */
+    .save-btn {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .save-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+    .save-btn:active {
+      transform: translateY(0);
+    }
+    .save-btn.saved {
+      background: #28a745;
+    }
+    
+    /* Footer */
+    .footer {
+      margin-top: 12px;
+      font-size: 11px;
+      color: #999;
+      text-align: center;
+    }
+    
+    /* Warning */
+    .warning {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #856404;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>✨ AI Reply Assistant</h1>
+  <p class="subtitle">Smart replies for Match.com conversations</p>
+  
+  <div class="status" id="status">
+    Checking status...
+  </div>
+  
+  <!-- Mode Section -->
+  <div class="section">
+    <div class="section-title">
+      <span>⚡</span> Mode Settings
+    </div>
+    
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Auto Mode</div>
+        <div class="toggle-sublabel">Auto-generate replies on new messages</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="autoMode">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    
+    <div class="toggle-row" id="autoSendRow" style="display: none;">
+      <div>
+        <div class="toggle-label">Auto Send</div>
+        <div class="toggle-sublabel">Automatically send generated replies</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="autoSend">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    
+    <div id="delayRow" style="display: none; padding-top: 8px;">
+      <div class="input-label">Reply Delay (human-like timing)</div>
+      <div class="delay-input">
+        <input type="number" class="input-field" id="replyDelay" min="1" max="30" value="3">
+        <span class="delay-unit">to</span>
+        <input type="number" class="input-field" id="replyDelayMax" min="2" max="60" value="8">
+        <span class="delay-unit">seconds</span>
+      </div>
+      
+      <div class="input-group" style="margin-top: 12px;">
+        <div class="input-label">Delay Between Chats (prevents rapid replies)</div>
+        <div class="delay-input">
+          <input type="number" class="input-field" id="chatSwitchDelay" min="5" max="300" value="30">
+          <span class="delay-unit">seconds</span>
+        </div>
+        <div class="toggle-sublabel" style="margin-top: 4px;">
+          Wait this long before replying to a different conversation
+        </div>
+      </div>
+    </div>
+    
+    <div class="warning" id="autoWarning" style="display: none;">
+      ⚠️ Auto mode will respond to ALL incoming messages automatically. Use with caution.
+    </div>
+  </div>
+  
+  <!-- Random Break Section -->
+  <div class="section" id="breakSection" style="display: none;">
+    <div class="section-title">
+      <span>☕</span> Random Break Mode
+    </div>
+    
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Enable Breaks</div>
+        <div class="toggle-sublabel">Take random breaks to appear human</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="randomBreakMode">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    
+    <div id="breakSettingsRow" style="display: none; padding-top: 8px;">
+      <div class="input-group">
+        <div class="input-label">Break Duration (minutes)</div>
+        <div class="delay-input">
+          <input type="number" class="input-field" id="breakDurationMin" min="1" max="30" value="5">
+          <span class="delay-unit">to</span>
+          <input type="number" class="input-field" id="breakDurationMax" min="2" max="60" value="15">
+          <span class="delay-unit">min</span>
+        </div>
+      </div>
+      
+      <div class="input-group">
+        <div class="input-label">Take a break every</div>
+        <div class="delay-input">
+          <input type="number" class="input-field" id="breakIntervalMin" min="15" max="120" value="45">
+          <span class="delay-unit">to</span>
+          <input type="number" class="input-field" id="breakIntervalMax" min="30" max="180" value="75">
+          <span class="delay-unit">min</span>
+        </div>
+      </div>
+    </div>
+    
+    <div id="breakStatus" class="warning" style="display: none; background: #d1ecf1; border-color: #bee5eb; color: #0c5460;">
+      <span id="breakStatusText">☕ Currently on break...</span>
+    </div>
+  </div>
+  
+  <!-- Social Media Section -->
+  <div class="section">
+    <div class="section-title">
+      <span>📱</span> CTA Settings
+    </div>
+    
+    <div class="input-group">
+      <div class="input-label">
+        <span>📸</span> Instagram Username
+      </div>
+      <input type="text" class="input-field" id="instagramHandle" placeholder="@your_instagram">
+    </div>
+    
+    <div class="input-group">
+      <div class="input-label">
+        <span>👻</span> Snapchat Username
+      </div>
+      <input type="text" class="input-field" id="snapchatHandle" placeholder="your_snapchat">
+    </div>
+    
+    <div class="input-group">
+      <div class="input-label">
+        <span>☕</span> Preferred CTA Type
+      </div>
+      <select class="input-field" id="ctaType">
+        <option value="instagram">Instagram</option>
+        <option value="snapchat">Snapchat</option>
+        <option value="coffee">Coffee/Meet up</option>
+        <option value="random">Random (mix)</option>
+      </select>
+    </div>
+  </div>
+  
+  <!-- Save Button -->
+  <button class="save-btn" id="saveBtn">Save Settings</button>
+  
+  <div class="footer">
+    Settings are saved locally and synced across tabs.
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
