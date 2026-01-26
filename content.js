@@ -296,18 +296,64 @@
   function getPartnerDisplayName() {
     try {
       // Method 1: Look for name in main conversation header (most reliable)
+      // The name is in an h1 element within main (e.g., <h1 class="css-1gx31cz">Raddoc</h1>)
+      // "Matches" is the page/platform name, NOT the partner name
+      // The partner name h1 is usually inside a button or div in the conversation header area
       const main = document.querySelector('main, [role="main"]');
       if (main) {
-        // Try h1, h2, or elements with name/title classes
-        const nameSelectors = 'h1, h2, [class*="title" i], [class*="name" i], [class*="profile" i], [class*="header" i]';
-        const nameEl = main.querySelector(nameSelectors);
-        if (nameEl) {
+        // Strategy: Find h1 elements, but prioritize those in the conversation header area
+        // The partner name h1 is typically inside a button or specific container structure
+        // Look for h1 inside button first (conversation header), then other containers
+        const h1InButton = main.querySelector('button h1, button[class*="css-"] h1');
+        if (h1InButton) {
+          const text = (h1InButton.textContent || '').trim();
+          if (text && text.length >= 2 && text.length <= 50 &&
+              text.toLowerCase() !== 'matches' &&
+              !/^(matches?|messages?|chat|conversation|match\.com|active|your\s+turn|home|profile|settings)/i.test(text)) {
+            console.log(`[AI Assistant] 📛 Found partner name in button h1: "${text}"`);
+            return text;
+          }
+        }
+        
+        // Priority 2: Check all h1 elements, but prioritize those in conversation header structure
+        // The partner name h1 is in the same DOM position for all chats (inside button with css-* classes)
+        const h1Elements = main.querySelectorAll('h1');
+        for (const h1 of h1Elements) {
+          const text = (h1.textContent || '').trim();
+          
+          // Skip "Matches" explicitly (it's the page name, not a partner name)
+          if (text.toLowerCase() === 'matches') {
+            continue;
+          }
+          
+          // Check if this h1 is in a button or has css-* class (indicates conversation header)
+          const parent = h1.parentElement;
+          const isInButton = parent && (parent.tagName === 'BUTTON' || parent.closest('button'));
+          const hasCssClass = h1.className && typeof h1.className === 'string' && h1.className.includes('css-');
+          const parentHasCssClass = parent && parent.className && typeof parent.className === 'string' && parent.className.includes('css-');
+          
+          // Partner name h1 is usually in button or has css-* classes (same position for all chats)
+          if (text && text.length >= 2 && text.length <= 50 &&
+              !/^(matches?|messages?|chat|conversation|match\.com|active|your\s+turn|home|profile|settings)/i.test(text)) {
+            // If it's in a button or has css classes, it's likely the partner name (like "Ethan Reich", "Raddoc", etc.)
+            if (isInButton || hasCssClass || parentHasCssClass) {
+              console.log(`[AI Assistant] 📛 Found partner name in h1: "${text}" (in button: ${isInButton}, has css: ${hasCssClass || parentHasCssClass})`);
+              return text;
+            }
+          }
+        }
+        
+        // Fallback: Try other name/title elements, but exclude "Matches"
+        const nameSelectors = 'h2, [class*="title" i], [class*="name" i], [class*="profile" i], [class*="header" i]';
+        const nameEls = main.querySelectorAll(nameSelectors);
+        for (const nameEl of nameEls) {
           const t = (nameEl.textContent || '').trim();
           // Extract first word/phrase (name before comma, age, etc.)
           const namePart = t.split(/[\n,]/)[0].trim();
-          if (namePart && namePart.length <= 50 && namePart.length >= 2 && 
-              !/^(messages?|chat|conversation|match\.com|active|your\s+turn)/i.test(namePart)) {
-            console.log(`[AI Assistant] 📛 Found partner name in header: "${namePart}"`);
+          if (namePart && namePart.length >= 2 && namePart.length <= 50 &&
+              namePart.toLowerCase() !== 'matches' &&
+              !/^(matches?|messages?|chat|conversation|match\.com|active|your\s+turn|home|profile|settings)/i.test(namePart)) {
+            console.log(`[AI Assistant] 📛 Found partner name in header element: "${namePart}"`);
             return namePart;
           }
         }
@@ -321,9 +367,10 @@
         // Get text, remove "Your turn" badge text, extract first part
         const raw = (cur.el.textContent || '').replace(/\byour\s+turn\b/gi, '').trim();
         const namePart = raw.split(/[\n,]/)[0].trim();
-        // Filter out common non-name patterns
+        // Filter out common non-name patterns, especially "Matches" (page name)
         if (namePart && namePart.length >= 2 && namePart.length <= 40 &&
-            !/^(messages?|chat|conversation|match|active)/i.test(namePart)) {
+            namePart.toLowerCase() !== 'matches' &&
+            !/^(matches?|messages?|chat|conversation|match|active)/i.test(namePart)) {
           console.log(`[AI Assistant] 📛 Found partner name in sidebar: "${namePart}"`);
           return namePart;
         }
