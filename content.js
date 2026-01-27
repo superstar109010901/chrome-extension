@@ -809,7 +809,7 @@
     const byPlaceholder = q('textarea[placeholder*="message" i], textarea[placeholder*="start" i], ' +
       'input[placeholder*="message" i], input[placeholder*="start" i], ' +
       'textarea[aria-label*="message" i], textarea[role="textbox"], ' +
-      '[placeholder*="Start message" i]');
+      '[placeholder*="Start message" i], [placeholder*="conversation" i], [placeholder*="Say something" i]');
     if (byPlaceholder) return byPlaceholder;
 
     const contentEditable = q('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label*="message" i]');
@@ -844,22 +844,22 @@
     // Try GraphQL cache first (most reliable)
     const convId = getConversationId();
     
-    // Check cache by conversation ID
-    if (convId && gqlConversationCache[convId] && gqlConversationCache[convId].length > 0) {
+    // Check cache by conversation ID - return even if [] (confirmed no type=Message items, e.g. only Like)
+    if (convId && convId in gqlConversationCache) {
       const gqlMessages = gqlConversationCache[convId];
-      console.log(`[AI Assistant] 📋 Using ${gqlMessages.length} messages from GraphQL cache (by convId: ${convId})`);
-      return gqlMessages.slice(-CONFIG.MAX_MESSAGES_TO_SEND);
+      const arr = Array.isArray(gqlMessages) ? gqlMessages : [];
+      console.log(`[AI Assistant] 📋 Using ${arr.length} messages from GraphQL cache (by convId: ${convId})`);
+      return arr.length > 0 ? arr.slice(-CONFIG.MAX_MESSAGES_TO_SEND) : arr;
     }
     
     // Also check if we can find messages by any userId key (in case URL-based ID doesn't match)
     const cachedKeys = Object.keys(gqlConversationCache);
     if (cachedKeys.length > 0) {
-      // Use the most recent cache entry if current convId not found
       const latestKey = cachedKeys[cachedKeys.length - 1];
       const gqlMessages = gqlConversationCache[latestKey];
-      if (gqlMessages && gqlMessages.length > 0) {
+      if (gqlMessages && Array.isArray(gqlMessages)) {
         console.log(`[AI Assistant] 📋 Using ${gqlMessages.length} messages from GraphQL cache (by key: ${latestKey})`);
-        return gqlMessages.slice(-CONFIG.MAX_MESSAGES_TO_SEND);
+        return gqlMessages.length > 0 ? gqlMessages.slice(-CONFIG.MAX_MESSAGES_TO_SEND) : gqlMessages;
       }
     }
     
@@ -1381,28 +1381,99 @@
       return;
     }
 
-    // If we're not currently inside an open conversation, try switching to one
-    if (!messageInput) {
-      const currentConvId = getConversationId();
-      // If we're on the list page, keep rotating to open chats
-      if (!nextAutoSwitchAt) nextAutoSwitchAt = Date.now();
-      if (Date.now() >= nextAutoSwitchAt) autoSwitchToNextChat(currentConvId);
-      return;
+    // Always refresh message input (may not be set yet on empty "You're a match" view)
+    if (!messageInput || (document.body && !document.body.contains(messageInput))) {
+      messageInput = findMessageInput();
     }
+
+    // Get current conversation ID early so we can run empty-conversation check before requiring messageInput
+    const currentConvId = getConversationId();
     
-    // Check break status first
+    // Check break status
     await checkBreakStatus();
     if (!isAutoSessionActive(session)) return;
-    
-    // Skip if on break
     if (isOnBreak) {
       console.log('[AI Assistant] ☕ On break, skipping auto-reply');
       logSkipReason('currently on break');
       return;
     }
 
-    // Get current conversation ID
-    const currentConvId = getConversationId();
+    // CRITICAL: Run empty-conversation check BEFORE requiring messageInput, so we send greeting on "You're a match" view
+    const messages = extractMessages();
+    if (messages.length === 0) {
+      const convId = getConversationId();
+      const hasGraphQLMessages = convId && gqlConversationCache[convId] && gqlConversationCache[convId].length > 0;
+      const conversationIdForTurnCount = currentConvId || convId;
+      const { turnCount } = await getTurnCount(conversationIdForTurnCount);
+      if (!hasGraphQLMessages && turnCount === 0) {
+        messageInput = messageInput || findMessageInput();
+        if (messageInput) {
+          console.log('[AI Assistant] 💬 Empty conversation – sending first greeting');
+          isProcessingAuto = true;
+          try {
+            if (floatingButton) {
+              floatingButton.disabled = true;
+              floatingButton.textContent = '🤖 Generating greeting...';
+              floatingButton.classList.add('match-ai-reply-button--processing');
+            }
+            const greeting = await generateAIReply([], 0, false);
+            if (!isAutoSessionActive(session)) return;
+            await new Promise(r => setTimeout(r, getRandomDelay()));
+            if (!isAutoSessionActive(session)) return;
+            messageInput = findMessageInput();
+            if (!messageInput) {
+              console.error('[AI Assistant] Message input lost');
+              return;
+            }
+            insertReplyIntoInput(greeting);
+            if (settings.autoSend) {
+              await new Promise(r => setTimeout(r, 800));
+              if (!isAutoSessionActive(session)) return;
+              const sent = clickSendButton();
+              if (sent) {
+                await incrementTurnCount(conversationIdForTurnCount);
+                lastReplyTime = Date.now();
+                lastConversationId = conversationIdForTurnCount;
+                await new Promise(r => setTimeout(r, 2500));
+                lastMessageHash = getMessagesHash();
+                repliedToInThisCycle.add(conversationIdForTurnCount);
+                const nextId = findNextYourTurnConversationId(conversationIdForTurnCount, true);
+                if (nextId) autoSwitchToNextChat(conversationIdForTurnCount);
+              }
+            }
+          } catch (e) {
+            console.error('[AI Assistant] Error sending greeting:', e);
+          } finally {
+            isProcessingAuto = false;
+            restoreButtonState();
+          }
+          return;
+        }
+        logSkipReason('empty conversation but no message input yet');
+        nextAutoSwitchAt = Math.max(nextAutoSwitchAt || 0, Date.now() + 2000);
+        return;
+      }
+      if (hasGraphQLMessages) {
+        logSkipReason('GraphQL has messages but DOM empty – waiting');
+        nextAutoSwitchAt = Math.max(nextAutoSwitchAt || 0, Date.now() + 2000);
+        return;
+      }
+      if (turnCount > 0) {
+        logSkipReason('no messages but turnCount > 0');
+        nextAutoSwitchAt = Math.max(nextAutoSwitchAt || 0, Date.now() + 3000);
+        return;
+      }
+      logSkipReason('empty conversation – waiting for input');
+      nextAutoSwitchAt = Math.max(nextAutoSwitchAt || 0, Date.now() + 2000);
+      return;
+    }
+
+    // If we're not inside an open conversation (no input), try switching to one
+    if (!messageInput) {
+      if (!nextAutoSwitchAt) nextAutoSwitchAt = Date.now();
+      if (Date.now() >= nextAutoSwitchAt) autoSwitchToNextChat(currentConvId);
+      return;
+    }
     
     // Periodically reset cycle tracking (every 5 minutes) to handle new "Your turn" chats
     if (Date.now() - lastCycleResetTime > 5 * 60 * 1000) {
@@ -1441,10 +1512,9 @@
       }
     }
     
-    // Check if there's a new message that needs a reply
+    // Check if there's a new message that needs a reply (messages already from early extractMessages() when non-empty)
     const currentHash = getMessagesHash();
     const messagesChanged = currentHash !== lastMessageHash;
-    const messages = extractMessages();
     
     // CRITICAL: Check DOM order of "Received:" and "Sent:" indicators
     // If first "Received:" is above first "Sent:" → they sent most recent → we should reply
@@ -1605,91 +1675,6 @@
       console.log(`[AI Assistant] Hash check: changed=${messagesChanged}, needsReply=${shouldReply}`);
     } else {
       console.log('[AI Assistant] ⚠️ No messages found in conversation');
-    }
-
-    // CRITICAL: If messages array is empty, check if this is a new conversation
-    // If so, send a first greeting message
-    if (messages.length === 0) {
-      // Check if we've already sent a greeting to this conversation
-      const { turnCount } = await getTurnCount(currentConvId);
-      
-      if (turnCount === 0) {
-        // This is a brand new conversation - send first greeting
-        console.log('[AI Assistant] 💬 Empty conversation detected - sending first greeting');
-        isProcessingAuto = true;
-        
-        try {
-          // Update button to show processing
-          if (floatingButton) {
-            floatingButton.disabled = true;
-            floatingButton.textContent = '🤖 Generating greeting...';
-            floatingButton.classList.add('match-ai-reply-button--processing');
-          }
-
-          const partnerName = getPartnerDisplayName();
-          const greeting = await generateAIReply([], 0, false); // Empty messages, turnCount 0, no CTA
-          console.log('[AI Assistant] Got greeting:', greeting);
-          if (!isAutoSessionActive(session)) return;
-          
-          // Wait for human-like delay
-          const delay = getRandomDelay();
-          console.log(`[AI Assistant] Waiting ${delay}ms before typing greeting...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          if (!isAutoSessionActive(session)) return;
-          
-          // Re-find message input
-          messageInput = findMessageInput();
-          if (!messageInput) {
-            console.error('[AI Assistant] Message input lost!');
-            return;
-          }
-          if (!isAutoSessionActive(session)) return;
-          
-          // Insert greeting into input
-          insertReplyIntoInput(greeting);
-          console.log('[AI Assistant] Greeting inserted into input');
-          if (!isAutoSessionActive(session)) return;
-          
-          // Auto-send if enabled
-          if (settings.autoSend) {
-            await new Promise(resolve => setTimeout(resolve, 800));
-            if (!isAutoSessionActive(session)) return;
-            
-            const sent = clickSendButton();
-            if (sent) {
-              console.log('[AI Assistant] ✅ First greeting sent automatically!');
-              
-              // Update turn count
-              await incrementTurnCount(currentConvId);
-              lastReplyTime = Date.now();
-              lastConversationId = currentConvId;
-              
-              // Wait for DOM to update
-              await new Promise(resolve => setTimeout(resolve, 2500));
-              lastMessageHash = getMessagesHash();
-              repliedToInThisCycle.add(currentConvId);
-              
-              // Switch to next chat after greeting
-              const nextChatId = findNextYourTurnConversationId(currentConvId, true);
-              if (nextChatId) {
-                autoSwitchToNextChat(currentConvId);
-              }
-            }
-          }
-        } catch (error) {
-          console.error('[AI Assistant] Error sending greeting:', error);
-        } finally {
-          isProcessingAuto = false;
-          restoreButtonState();
-        }
-        return;
-      } else {
-        // Messages empty but we've already sent something - wait for DOM to load
-        console.log('[AI Assistant] ⚠️ No messages extracted yet; waiting before deciding to switch');
-        logSkipReason('no messages extracted yet');
-        nextAutoSwitchAt = Math.max(nextAutoSwitchAt, Date.now() + 3000);
-        return;
-      }
     }
     
     // CRITICAL CHECK: If we just replied to this conversation, don't reply again - switch instead
@@ -2284,12 +2269,13 @@
           requestBody = typeof init.body === 'string' ? init.body : JSON.stringify(init.body);
         }
         
-        if (requestBody && requestBody.includes('MutualInboxConversationHistory')) {
+        if (requestBody && requestBody.toLowerCase().includes('mutualinboxconversationhistory')) {
           const json = await clonedResponse.json().catch(() => null);
+          // Support both camelCase and PascalCase response keys
+          const historyPayload = json?.data?.mutualInboxConversationHistory ?? json?.data?.MutualInboxConversationHistory;
+          const history = historyPayload?.matchesHistory;
           
-          if (json?.data?.mutualInboxConversationHistory?.matchesHistory) {
-            const history = json.data.mutualInboxConversationHistory.matchesHistory;
-            
+          if (history) {
             // Try to get conversation ID from current URL first
             let convId = getConversationId();
             
@@ -2302,38 +2288,40 @@
               }
             } catch (_) {}
             
-            // Use userId as fallback conversation identifier if URL-based ID not available
-            if (!convId && requestUserId) {
-              convId = requestUserId;
-            }
+            // Use userId from response (matchesHistory.userId) or request as fallback
+            const historyUserId = history.userId;
+            if (!convId && requestUserId) convId = requestUserId;
+            if (!convId && historyUserId) convId = historyUserId;
             
-            // Extract partner name (handle) - store by both convId and userId for lookup
+            const cacheKey = convId || requestUserId || historyUserId;
+            
+            // Extract partner name (handle) - store by all known IDs for lookup
             if (history.handle) {
-              if (convId) {
-                partnerNamesByConversation[convId] = history.handle;
-                console.log(`[AI Assistant] 📛 Extracted partner name from GraphQL: "${history.handle}" for conversation ${convId}`);
+              for (const id of [convId, requestUserId, historyUserId].filter(Boolean)) {
+                partnerNamesByConversation[id] = history.handle;
               }
-              if (requestUserId && requestUserId !== convId) {
-                partnerNamesByConversation[requestUserId] = history.handle;
+              if (cacheKey) {
+                console.log(`[AI Assistant] 📛 Extracted partner name from GraphQL: "${history.handle}" for conversation ${cacheKey}`);
               }
             }
             
-            // Extract messages from GraphQL response
+            // Extract messages from GraphQL: only type=Message counts; type=Like has message=null
             if (history.items && Array.isArray(history.items)) {
               const messages = history.items
-                .filter(item => item.type === 'Message' && item.message && item.message.trim())
+                .filter(item => item.type === 'Message' && item.message && (item.message + '').trim())
                 .map(item => ({
                   text: item.message,
                   isOutgoing: item.direction === 'Sent',
                   timestamp: new Date(item.sentDate).getTime()
                 }));
               
-              if (messages.length > 0) {
-                // Store by conversation ID (URL-based) if available, otherwise by userId
-                const cacheKey = convId || requestUserId;
-                if (cacheKey) {
-                  gqlConversationCache[cacheKey] = messages;
+              // Always store cache for this conversation: [] = confirmed no messages (e.g. only "Like" items)
+              if (cacheKey) {
+                gqlConversationCache[cacheKey] = messages;
+                if (messages.length > 0) {
                   console.log(`[AI Assistant] 📋 Cached ${messages.length} messages from GraphQL for conversation ${cacheKey}`);
+                } else {
+                  console.log(`[AI Assistant] 📋 Cached 0 messages (empty/conversation or only Like items) for ${cacheKey} - eligible for first greeting`);
                 }
               }
             }
