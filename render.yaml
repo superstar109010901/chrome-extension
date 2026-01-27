@@ -1,12 +1,12 @@
 services:
   - type: web
-    name: match-ai-backend
+    name: fuck-match-group-backend
     env: node
     region: oregon  # or your preferred region
     plan: free      # or starter, standard, etc.
 
     # The backend is already at this repo root
-    rootDir: .
+    rootDir: backend/
 
     buildCommand: |
       npm install
