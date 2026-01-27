@@ -16,7 +16,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   }
 });
 
-// Optional: Handle messages from content script if needed
+// Handle messages from content script & popup (proxy to backend where needed)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getStorage') {
     chrome.storage.local.get(request.keys, (result) => {
@@ -55,6 +55,69 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           throw new Error(`API error: ${res.status} ${text}`.trim());
+        }
+
+        const data = await res.json();
+        sendResponse({ ok: true, data });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    })();
+
+    return true; // async response
+  }
+
+  // Proxy: get settings from backend (MongoDB)
+  if (request.action === 'getSettings') {
+    (async () => {
+      try {
+        const backendUrl = request.backendUrl;
+        if (!backendUrl || typeof backendUrl !== 'string') {
+          throw new Error('Missing backendUrl for getSettings');
+        }
+
+        const res = await fetch(`${backendUrl.replace(/\/$/, '')}/settings`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Settings API error: ${res.status} ${text}`.trim());
+        }
+
+        const data = await res.json();
+        sendResponse({ ok: true, data });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    })();
+
+    return true; // async response
+  }
+
+  // Proxy: save settings to backend (MongoDB)
+  if (request.action === 'saveSettings') {
+    (async () => {
+      try {
+        const backendUrl = request.backendUrl;
+        const settings = request.settings;
+        if (!backendUrl || typeof backendUrl !== 'string') {
+          throw new Error('Missing backendUrl for saveSettings');
+        }
+        if (!settings || typeof settings !== 'object') {
+          throw new Error('Missing settings payload');
+        }
+
+        const res = await fetch(`${backendUrl.replace(/\/$/, '')}/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings)
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Save settings API error: ${res.status} ${text}`.trim());
         }
 
         const data = await res.json();

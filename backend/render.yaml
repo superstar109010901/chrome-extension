@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: match-ai-backend
+    env: node
+    region: oregon  # or your preferred region
+    plan: free      # or starter, standard, etc.
+
+    # The backend is already at this repo root
+    rootDir: .
+
+    buildCommand: |
+      npm install
+
+    startCommand: |
+      npm start
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Set this from the Render dashboard (don’t commit real values)
+      - key: OPENAI_API_KEY
+        sync: false
+
+      - key: MONGODB_URI
+        sync: false
+
+      - key: MONGODB_DB_NAME
+        value: match_ai_assistant
+
+      # Optional: override model or port if needed
+      - key: OPENAI_MODEL
+        value: gpt-3.5-turbo
+      - key: PORT
+        value: "3000"

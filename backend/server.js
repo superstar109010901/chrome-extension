@@ -8,6 +8,7 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
+const { connectDB, getSettingsCollection } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,6 +16,9 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Connect to MongoDB on startup
+connectDB().catch(console.error);
 
 // OpenAI client
 let openai;
@@ -57,17 +61,9 @@ Examples:
 - "My snap is ${snap}, add me!"`;
       break;
       
-    case 'coffee':
-      ctaInstructions = `Suggest meeting for coffee or drinks casually.
-Examples:
-- "Want to grab coffee sometime this week?"
-- "We should meet up for drinks!"
-- "How about coffee this weekend?"`;
-      break;
-      
     case 'random':
     default:
-      // Build dynamic examples based on what handles are available
+      // Build dynamic examples based on what handles are available (Instagram and Snapchat only)
       const examples = [];
       if (hasInstagram) {
         examples.push(`- "Let's chat on Instagram! ${insta}"`);
@@ -75,9 +71,13 @@ Examples:
       if (hasSnapchat) {
         examples.push(`- "Add me on Snap: ${snap}"`);
       }
-      examples.push(`- "Want to grab coffee this weekend?"`);
       
-      ctaInstructions = `Suggest moving the conversation off the app. Choose one option naturally.
+      // If no handles available, default to Instagram placeholder
+      if (examples.length === 0) {
+        examples.push(`- "Let's chat on Instagram! ${insta}"`);
+      }
+      
+      ctaInstructions = `Suggest moving the conversation off the app to Instagram or Snapchat. Choose one option naturally.
 ${examples.join('\n')}`;
       break;
   }
@@ -120,7 +120,7 @@ Rules:
 - Sound human and natural, not robotic
 - Reply MUST directly address the other person's most recent message/topic
 - Do NOT introduce unrelated topics or random activities
-- Do NOT mention Instagram/Snap/coffee unless explicitly asked OR a CTA is requested`;
+- Do NOT mention Instagram/Snapchat unless explicitly asked OR a CTA is requested`;
   if (partnerName && typeof partnerName === 'string' && partnerName.trim()) {
     const name = partnerName.trim();
     systemPrompt += `\n\nCRITICAL - Name: The other person's display name is "${name}". You MUST use this exact name when greeting or addressing them. Never use a different name (e.g. do not say Jason if their name is Frank).`;
@@ -155,35 +155,40 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
 
     let reply = completion.choices[0]?.message?.content?.trim() || '';
     
-    // Determine if this is a CTA
+    // Determine if this is a CTA (Instagram or Snapchat only)
     const isCTA = shouldGenerateCTA && (
       reply.toLowerCase().includes('instagram') ||
+      reply.toLowerCase().includes('ig') ||
       reply.toLowerCase().includes('snap') ||
-      reply.toLowerCase().includes('coffee') ||
-      reply.toLowerCase().includes('meet') ||
-      reply.toLowerCase().includes('grab') ||
-      reply.toLowerCase().includes('drinks') ||
+      reply.toLowerCase().includes('snapchat') ||
       reply.includes('@') ||
       (instagramHandle && reply.includes(instagramHandle)) ||
       (snapchatHandle && reply.includes(snapchatHandle))
     );
 
-    // If this is a CTA, add invisible Unicode characters between every character in the entire message
-    // This makes the CTA appear corrupted/invisible (invisible mode)
+    // If this is a CTA, add invisible Unicode characters between characters in the entire message.
+    // This makes the CTA appear corrupted/invisible (invisible mode).
     if (isCTA) {
       // Invisible Unicode characters: zero-width space, zero-width non-joiner, zero-width joiner, left-to-right mark, right-to-left mark
       const invisibleChars = '\u200B\u200C\u200D\u200E\u200F';
       
       // Apply invisible characters to the entire CTA message (not just last line)
-      // Split into characters and add invisible char between each character
+      // Split into characters and add a RANDOM number (1–3) of invisible chars between each pair
       reply = reply.split('').map((char, index) => {
         // Don't add invisible char after the last character
         if (index === reply.length - 1) {
           return char;
         }
-        // Add random invisible char between each character
-        const randomInvisible = invisibleChars.charAt(Math.floor(Math.random() * invisibleChars.length));
-        return char + randomInvisible;
+        // Add between 1 and 3 random invisible chars between each character
+        const count = 1 + Math.floor(Math.random() * 3); // 1, 2, or 3
+        let buffer = char;
+        for (let i = 0; i < count; i++) {
+          const randomInvisible = invisibleChars.charAt(
+            Math.floor(Math.random() * invisibleChars.length)
+          );
+          buffer += randomInvisible;
+        }
+        return buffer;
       }).join('');
     }
 
@@ -207,7 +212,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
  *   requestCTA: boolean,
  *   instagramHandle: string (optional),
  *   snapchatHandle: string (optional),
- *   ctaType: 'instagram' | 'snapchat' | 'coffee' | 'random' (optional)
+ *   ctaType: 'instagram' | 'snapchat' | 'random' (optional)
  * }
  * 
  * Response:
@@ -260,6 +265,120 @@ app.post('/generate-reply', async (req, res) => {
 });
 
 /**
+ * Default settings structure
+ */
+const DEFAULT_SETTINGS = {
+  autoMode: false,
+  autoSend: true,
+  replyDelayMin: 3,
+  replyDelayMax: 8,
+  chatSwitchDelay: 30,
+  randomBreakMode: false,
+  breakDurationMin: 5,
+  breakDurationMax: 15,
+  breakIntervalMin: 45,
+  breakIntervalMax: 75,
+  instagramHandle: '',
+  snapchatHandle: '',
+  ctaType: 'instagram'
+};
+
+/**
+ * GET /settings
+ * Get extension settings from MongoDB
+ * Returns default settings if database is empty
+ */
+app.get('/settings', async (req, res) => {
+  try {
+    const settingsCollection = await getSettingsCollection();
+    
+    // Get settings (there should only be one document)
+    const settings = await settingsCollection.findOne({});
+    
+    if (!settings) {
+      // Database is empty, return default settings
+      console.log('📋 No settings found in database, returning defaults');
+      return res.json(DEFAULT_SETTINGS);
+    }
+    
+    // Remove MongoDB _id field and return settings
+    const { _id, ...settingsData } = settings;
+    res.json(settingsData);
+    console.log('💾 Settings fetched from MongoDB:', settingsData);
+  } catch (error) {
+    console.error('Error getting settings:', error);
+    res.status(500).json({ 
+      error: 'Failed to get settings',
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * POST /settings
+ * Save extension settings to MongoDB
+ * Creates or updates the single settings document
+ */
+app.post('/settings', async (req, res) => {
+  try {
+    const settingsCollection = await getSettingsCollection();
+    const newSettings = req.body;
+    // Normalize incoming settings against defaults
+    const normalizeSettings = (src = {}) => ({
+      autoMode: src.autoMode ?? DEFAULT_SETTINGS.autoMode,
+      autoSend: src.autoSend ?? DEFAULT_SETTINGS.autoSend,
+      replyDelayMin: src.replyDelayMin ?? DEFAULT_SETTINGS.replyDelayMin,
+      replyDelayMax: src.replyDelayMax ?? DEFAULT_SETTINGS.replyDelayMax,
+      chatSwitchDelay: src.chatSwitchDelay ?? DEFAULT_SETTINGS.chatSwitchDelay,
+      randomBreakMode: src.randomBreakMode ?? DEFAULT_SETTINGS.randomBreakMode,
+      breakDurationMin: src.breakDurationMin ?? DEFAULT_SETTINGS.breakDurationMin,
+      breakDurationMax: src.breakDurationMax ?? DEFAULT_SETTINGS.breakDurationMax,
+      breakIntervalMin: src.breakIntervalMin ?? DEFAULT_SETTINGS.breakIntervalMin,
+      breakIntervalMax: src.breakIntervalMax ?? DEFAULT_SETTINGS.breakIntervalMax,
+      instagramHandle: src.instagramHandle ?? DEFAULT_SETTINGS.instagramHandle,
+      snapchatHandle: src.snapchatHandle ?? DEFAULT_SETTINGS.snapchatHandle,
+      ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType
+    });
+
+    const settings = normalizeSettings(newSettings);
+
+    // Helper: shallow equality between two settings objects
+    const settingsEqual = (a, b) => {
+      const keys = Object.keys(DEFAULT_SETTINGS);
+      return keys.every((k) => a[k] === b[k]);
+    };
+
+    // Load existing settings (if any)
+    const existingDoc = await settingsCollection.findOne({});
+    const existingSettings = existingDoc ? normalizeSettings(existingDoc) : null;
+
+    // PROTECTION:
+    // If DB already has non-default settings and the incoming payload is *exactly* the defaults,
+    // treat this as a bad/automatic overwrite attempt and KEEP the original values.
+    if (existingSettings && settingsEqual(settings, DEFAULT_SETTINGS) && !settingsEqual(existingSettings, DEFAULT_SETTINGS)) {
+      console.log('⚠️  Ignoring default settings overwrite; keeping existing MongoDB settings');
+      return res.json({ success: true, settings: existingSettings });
+    }
+    
+    // Use upsert to create or update the single settings document
+    await settingsCollection.updateOne(
+      {}, // Empty filter means match any document (or none)
+      { $set: settings },
+      { upsert: true } // Create if doesn't exist
+    );
+    
+    console.log('💾 Settings saved to MongoDB');
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Error saving settings:', error);
+    res.status(500).json({ 
+      error: 'Failed to save settings',
+      message: error.message 
+    });
+  }
+});
+
+/**
  * Health check endpoint
  */
 app.get('/health', (req, res) => {
@@ -268,7 +387,8 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     features: {
       autoMode: true,
-      customCTA: true
+      customCTA: true,
+      mongodb: true
     }
   });
 });
@@ -282,13 +402,15 @@ app.get('/', (req, res) => {
     version: '2.0.0',
     endpoints: {
       'POST /generate-reply': 'Generate AI reply for conversation',
+      'GET /settings': 'Get extension settings from MongoDB',
+      'POST /settings': 'Save extension settings to MongoDB',
       'GET /health': 'Health check'
     },
     features: [
       'Auto/Manual mode support',
       'Custom Instagram handle for CTA',
       'Custom Snapchat handle for CTA',
-      'Coffee/meetup CTA option'
+      'Instagram/Snapchat CTA options'
     ]
   });
 });

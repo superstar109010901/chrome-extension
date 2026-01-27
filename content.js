@@ -15,7 +15,7 @@
 
   // Configuration
   const CONFIG = {
-    BACKEND_URL: 'https://2c6e7e3d87c1.ngrok-free.app',
+    BACKEND_URL: 'https://match-ai-backend.onrender.com',
     MIN_TURNS_FOR_CTA: 3,
     MAX_TURNS_FOR_CTA: 4,
     MAX_MESSAGES_TO_SEND: 6,
@@ -23,6 +23,17 @@
     AUTO_CHECK_INTERVAL: 2000, // Check for new messages every 2 seconds in auto mode
     CONVERSATION_ID_ATTRIBUTE: 'data-conversation-id'
   };
+
+  /**
+   * Helper: log a clear reason whenever we decide to skip replying
+   */
+  function logSkipReason(reason) {
+    try {
+      console.log(`[AI Assistant] ⏭️ Skipping this chat: ${reason}`);
+    } catch (_) {
+      // ignore logging errors
+    }
+  }
 
   // State
   let currentConversationId = null;
@@ -57,6 +68,8 @@
   let currentSequenceIndex = 0; // Current position in the sequence
   const repliedToIncomingMessages = {}; // { [conversationId]: Set of incoming message hashes we've replied to }
   const conversationsWhereTheySharedCTA = new Set(); // Don't reply anymore once they shared their IG/Snap/phone
+  const partnerNamesByConversation = {}; // { [conversationId]: "Sam" } - extracted from GraphQL response
+  let gqlConversationCache = {}; // { [conversationId]: [{ text, isOutgoing }] } - messages from GraphQL
 
   // Settings (loaded from storage)
   let settings = {
@@ -218,40 +231,55 @@
   }
 
   /**
-   * Load settings from chrome storage
+   * Load settings from MongoDB via backend API
    */
   async function loadSettings() {
     try {
-      const result = await chrome.storage.local.get('settings');
-      if (result.settings) {
-        settings = { ...settings, ...result.settings };
+      const response = await fetch(`${CONFIG.BACKEND_URL.replace(/\/$/, '')}/settings`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
+      const apiSettings = await response.json();
+      console.log('[AI Assistant] Raw settings from DB:', apiSettings);
+
+      // Merge API settings with defaults to ensure all fields exist
+      settings = { ...settings, ...apiSettings };
+      console.log('[AI Assistant] Effective settings after merge:', settings);
+
       await loadBreakState();
       updateAutoMode();
+      console.log('[AI Assistant] ✅ Settings loaded from MongoDB');
     } catch (error) {
-      console.error('Error loading settings:', error);
+      console.error('[AI Assistant] Error loading settings from API:', error);
+      // Use default settings if API fails
+      console.log('[AI Assistant] ⚠️ Using default settings (API unavailable)');
+      await loadBreakState();
+      updateAutoMode();
     }
   }
 
   /**
    * Listen for settings changes from popup
+   * When popup saves settings, it sends a message with the new settings
    */
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'settingsUpdated') {
+      // Update settings from the message
       settings = { ...settings, ...request.settings };
       updateAutoMode();
       sendResponse({ success: true });
     }
   });
 
-  // Also listen to storage changes (popup auto-saves and messages can fail in some cases)
+  // Listen for settings updates from popup (popup sends message after saving to API)
+  // Note: We no longer listen to chrome.storage changes for settings (they're in MongoDB now)
+  // But we still listen for breakState changes (break state is still in Chrome storage)
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
-    if (changes.settings?.newValue) {
-      settings = { ...settings, ...changes.settings.newValue };
-      updateAutoMode();
-      restoreButtonState();
-    }
+    // Only listen for breakState changes (settings are now in MongoDB)
     if (changes.breakState?.newValue) {
       // Keep button state consistent if break mode changes via popup
       loadBreakState().then(() => restoreButtonState()).catch(() => {});
@@ -290,10 +318,18 @@
   }
 
   /**
-   * Get the partner's display name from the conversation view (e.g. "Frank").
+   * Get the partner's display name from GraphQL cache first, then fallback to DOM.
    * Used so the AI uses the correct name instead of inventing one.
    */
   function getPartnerDisplayName() {
+    // Method 0: Check GraphQL cache first (most reliable)
+    const convId = getConversationId();
+    if (convId && partnerNamesByConversation[convId]) {
+      const name = partnerNamesByConversation[convId];
+      console.log(`[AI Assistant] 📛 Using partner name from GraphQL: "${name}"`);
+      return name;
+    }
+    
     try {
       // Method 1: Look for name in main conversation header (most reliable)
       // The name is in an h1 element within main (e.g., <h1 class="css-1gx31cz">Raddoc</h1>)
@@ -395,20 +431,27 @@
   }
 
   /**
-   * Detect if the other person shared their CTA (Instagram/Snapchat/phone) in incoming messages.
+   * Detect if the other person shared their CTA (Instagram/Snapchat) in incoming messages.
    * When true, we should not reply anymore to this conversation.
    */
   function incomingMessagesContainTheirCTA(messages) {
     if (!messages || !messages.length) return false;
-    const incoming = messages.filter(m => !m.isOutgoing).map(m => (m.text || '').toLowerCase());
+    const incoming = messages
+      .filter(m => !m.isOutgoing)
+      .map(m => (m.text || '').toLowerCase());
     const combined = incoming.join(' ');
+    // Only treat as their CTA when they clearly share an Instagram/Snapchat handle.
     const patterns = [
-      /\b(my\s+)?(ig|instagram)\s*(is|:)?\s*[@\w.-]+/i,
-      /\bmine\s+is\s+[@\w.-]{3,}/i,
-      /\b(my\s+)?(snap|snapchat)\s*(is|:)?\s*[\w.-]+/i,
+      // "my instagram is @handle" / "my ig is @handle"
+      /\b(my\s+)?(ig|instagram)\s*(is|:)?\s*[@\w.-]{3,}/i,
+      // "my snap is username" / "my snapchat is username"
+      /\b(my\s+)?(snap|snapchat)\s*(is|:)?\s*[\w.-]{3,}/i,
+      // "add me on snap/ig/instagram"
       /\badd\s+me\s+on\s+(snap|ig|instagram)\b/i,
-      /\b(may\s+i\s+have|can\s+i\s+get|what'?s?|whats)\s+(your\s+)?(number|#|digits)\b/i,
-      /\b(your\s+)?(number|#)\s*\??\s*$/im
+      // "find me on instagram/snapchat"
+      /\bfind\s+me\s+on\s+(instagram|ig|snapchat|snap)\b/i,
+      // generic "mine is @handle"
+      /\bmine\s+is\s+[@\w.-]{3,}/i
     ];
     return patterns.some(re => re.test(combined));
   }
@@ -794,10 +837,33 @@
   }
 
   /**
-   * Extract messages from the conversation DOM
+   * Extract messages from GraphQL cache first, then fallback to DOM scraping
    * More precise extraction to avoid picking up navigation/footer text
    */
   function extractMessages() {
+    // Try GraphQL cache first (most reliable)
+    const convId = getConversationId();
+    
+    // Check cache by conversation ID
+    if (convId && gqlConversationCache[convId] && gqlConversationCache[convId].length > 0) {
+      const gqlMessages = gqlConversationCache[convId];
+      console.log(`[AI Assistant] 📋 Using ${gqlMessages.length} messages from GraphQL cache (by convId: ${convId})`);
+      return gqlMessages.slice(-CONFIG.MAX_MESSAGES_TO_SEND);
+    }
+    
+    // Also check if we can find messages by any userId key (in case URL-based ID doesn't match)
+    const cachedKeys = Object.keys(gqlConversationCache);
+    if (cachedKeys.length > 0) {
+      // Use the most recent cache entry if current convId not found
+      const latestKey = cachedKeys[cachedKeys.length - 1];
+      const gqlMessages = gqlConversationCache[latestKey];
+      if (gqlMessages && gqlMessages.length > 0) {
+        console.log(`[AI Assistant] 📋 Using ${gqlMessages.length} messages from GraphQL cache (by key: ${latestKey})`);
+        return gqlMessages.slice(-CONFIG.MAX_MESSAGES_TO_SEND);
+      }
+    }
+    
+    // Fallback to DOM extraction
     const messages = [];
     
     // First, try to find the conversation/message container near the input
@@ -1307,6 +1373,11 @@
     const session = autoSessionId;
     // Skip if not in auto mode or already processing
     if (!settings.autoMode || isProcessingAuto) {
+      if (!settings.autoMode) {
+        logSkipReason('auto mode is OFF');
+      } else if (isProcessingAuto) {
+        logSkipReason('already processing another auto-reply');
+      }
       return;
     }
 
@@ -1326,6 +1397,7 @@
     // Skip if on break
     if (isOnBreak) {
       console.log('[AI Assistant] ☕ On break, skipping auto-reply');
+      logSkipReason('currently on break');
       return;
     }
 
@@ -1368,84 +1440,6 @@
         console.log(`[AI Assistant] ✅ Chat switch delay satisfied (${Math.floor(timeSinceLastReply / 1000)}s since last reply)`);
       }
     }
-    
-    // PRIMARY SOURCE OF TRUTH: Check if current chat has "Your turn" badge in DOM
-    const items = getConversationItemsInOrder();
-    const currentChatItem = items.find(item => item.id === currentConvId);
-    
-    // Re-check badge directly from DOM for current chat (more reliable than cached value)
-    // CRITICAL: Must check VISIBILITY, not just existence
-    let hasYourTurnBadge = false;
-    if (currentChatItem && currentChatItem.el) {
-      const a = currentChatItem.el;
-      const parent = a.parentElement;
-      const badgeSelectors = 'button, span, div, [class*="badge"], [class*="label"], [class*="turn"], [class*="indicator"]';
-      
-      // Helper to check if element is actually visible (not just in DOM)
-      const isElementVisible = (el) => {
-        if (!el) return false;
-        try {
-          const style = window.getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== 'none' &&
-                 style.visibility !== 'hidden' &&
-                 style.opacity !== '0' &&
-                 rect.width > 0 &&
-                 rect.height > 0 &&
-                 el.offsetParent !== null;
-        } catch (_) {
-          return false;
-        }
-      };
-      
-      // Check for badge in link, parent, or siblings - MUST be visible
-      const badgeInLink = a.querySelector(badgeSelectors);
-      const badgeInParent = parent?.querySelector(badgeSelectors);
-      const badgeInSibling = a.nextElementSibling?.querySelector?.(badgeSelectors) || 
-                            a.previousElementSibling?.querySelector?.(badgeSelectors);
-      
-      const checkBadge = (el) => {
-        if (!el) return false;
-        const text = el.textContent?.toLowerCase().trim();
-        return (text === 'your turn' || text.includes('your turn')) && isElementVisible(el);
-      };
-      
-      // Check all potential badge locations
-      hasYourTurnBadge = checkBadge(badgeInLink) || 
-                         checkBadge(badgeInParent) || 
-                         checkBadge(badgeInSibling);
-      
-      // Also check all badge elements in parent container
-      if (!hasYourTurnBadge && parent) {
-        const allBadges = parent.querySelectorAll(badgeSelectors);
-        for (const badgeEl of allBadges) {
-          if (checkBadge(badgeEl)) {
-            hasYourTurnBadge = true;
-            break;
-          }
-        }
-      }
-      
-      // Debug logging
-      console.log(`[AI Assistant] Badge check for ${currentConvId}: hasYourTurn=${hasYourTurnBadge}, cached=${currentChatItem.hasYourTurn}`);
-    }
-    
-    // CRITICAL: If current chat doesn't have "Your turn" badge, NEVER reply - switch immediately
-    if (!hasYourTurnBadge) {
-      console.log(`[AI Assistant] 🚫 Current chat (${currentConvId}) does NOT have "Your turn" badge - preventing reply`);
-      const nextYourTurnChat = findNextYourTurnConversationId(currentConvId, true);
-      if (nextYourTurnChat) {
-        console.log(`[AI Assistant] 🔄 Switching to ${nextYourTurnChat} which has "Your turn" badge`);
-        autoSwitchToNextChat(currentConvId);
-      } else {
-        console.log(`[AI Assistant] ⚠️ No other "Your turn" chats found`);
-        // Still prevent any reply attempt
-        nextAutoSwitchAt = Date.now() + (settings.chatSwitchDelay || 30) * 1000;
-      }
-      return; // CRITICAL: Exit early - do NOT proceed to reply logic
-    }
-    
-    console.log(`[AI Assistant] ✅ Current chat (${currentConvId}) has "Your turn" badge - proceeding with reply check`);
     
     // Check if there's a new message that needs a reply
     const currentHash = getMessagesHash();
@@ -1617,6 +1611,7 @@
     // Don't switch away - wait and retry extraction (DOM might still be loading).
     if (messages.length === 0) {
       console.log('[AI Assistant] ⚠️ No messages extracted yet; waiting before deciding to switch');
+      logSkipReason('no messages extracted yet');
       // Push switch timer forward to give DOM time to render
       nextAutoSwitchAt = Math.max(nextAutoSwitchAt, Date.now() + 3000);
       return;
@@ -1632,6 +1627,7 @@
       // If last message is outgoing (from us), we just replied - switch away immediately
       if (lastMsg.isOutgoing) {
         console.log('[AI Assistant] 🔄 Just replied to this chat; switching to next "Your turn" chat');
+        logSkipReason('just replied to this chat (last message is our own)');
         const nextChatId = findNextYourTurnConversationId(currentConvId, true);
         if (nextChatId) {
           autoSwitchToNextChat(currentConvId);
@@ -1649,6 +1645,7 @@
       const lastMsg = messages[messages.length - 1];
       if (lastMsg.isOutgoing) {
         console.log(`[AI Assistant] ⏭️ Already replied to ${currentConvId} in this cycle; switching to next chat`);
+        logSkipReason('already replied to this conversation in this cycle');
         const nextChatId = findNextYourTurnConversationId(currentConvId, true);
         if (nextChatId) {
           autoSwitchToNextChat(currentConvId);
@@ -1663,6 +1660,7 @@
       // CRITICAL: If they already shared their CTA (IG/Snap/phone), don't reply anymore – switch to next immediately
       if (conversationsWhereTheySharedCTA.has(currentConvId)) {
         console.log(`[AI Assistant] 🚫 They shared their CTA earlier – not replying. Switching to next chat.`);
+        logSkipReason('user already shared their own CTA earlier in this chat');
         const nextChatId = findNextYourTurnConversationId(currentConvId, true);
         if (nextChatId) {
           autoSwitchToNextChat(currentConvId);
@@ -1673,6 +1671,7 @@
       if (messages.length > 0 && incomingMessagesContainTheirCTA(messages)) {
         conversationsWhereTheySharedCTA.add(currentConvId);
         console.log(`[AI Assistant] 🚫 They shared their CTA (Instagram/Snap/number) – not replying anymore. Switching to next chat.`);
+        logSkipReason('this incoming message contains their CTA (Instagram/Snap/number)');
         const nextChatId = findNextYourTurnConversationId(currentConvId, true);
         if (nextChatId) {
           autoSwitchToNextChat(currentConvId);
@@ -1703,6 +1702,7 @@
       // Not our turn - handle switching logic
       const lastMsg = messages[messages.length - 1];
       console.log(`[AI Assistant] Last message is outgoing, skipping. Last: "${lastMsg?.text?.substring(0, 50) || 'N/A'}..." (outgoing: ${lastMsg?.isOutgoing})`);
+      logSkipReason('last message is outgoing (it is not our turn)');
       
       // Continuous rotation: only switch when it's NOT our turn AND we have messages to confirm it
       // Double-check: if we just switched to this chat, give it a moment before switching away
@@ -1726,58 +1726,6 @@
     allowInitialAutoReply = false;
     lastAttemptedAutoReplyByConversation[currentConvId] = { hash: currentHash, ts: Date.now() };
 
-    // FINAL SAFETY CHECK: Verify badge is VISIBLE before starting reply generation
-    // Re-check items list and verify visibility
-    const finalItems = getConversationItemsInOrder();
-    const finalBadgeCheck = finalItems.find(item => item.id === currentConvId);
-    
-    let finalHasBadge = false;
-    if (finalBadgeCheck && finalBadgeCheck.el) {
-      const a = finalBadgeCheck.el;
-      const parent = a.parentElement;
-      const badgeSelectors = 'button, span, div, [class*="badge"], [class*="label"], [class*="turn"], [class*="indicator"]';
-      
-      // Helper to check visibility
-      const isElementVisible = (el) => {
-        if (!el) return false;
-        try {
-          const style = window.getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== 'none' &&
-                 style.visibility !== 'hidden' &&
-                 style.opacity !== '0' &&
-                 rect.width > 0 &&
-                 rect.height > 0 &&
-                 el.offsetParent !== null;
-        } catch (_) {
-          return false;
-        }
-      };
-      
-      // Check all badge elements for visibility
-      const allBadges = parent?.querySelectorAll(badgeSelectors) || [];
-      for (const badgeEl of allBadges) {
-        const text = badgeEl.textContent?.toLowerCase().trim();
-        if ((text === 'your turn' || text.includes('your turn')) && isElementVisible(badgeEl)) {
-          finalHasBadge = true;
-          break;
-        }
-      }
-    }
-    
-    if (!finalHasBadge) {
-      console.log(`[AI Assistant] 🚫 FINAL CHECK: Chat ${currentConvId} does NOT have VISIBLE "Your turn" badge - aborting reply`);
-      isProcessingAuto = false;
-      const nextChat = findNextYourTurnConversationId(currentConvId, true);
-      if (nextChat) {
-        console.log(`[AI Assistant] 🔄 Switching to ${nextChat} which has "Your turn" badge`);
-        autoSwitchToNextChat(currentConvId);
-      }
-      return;
-    }
-    
-    console.log(`[AI Assistant] ✅ FINAL CHECK: Chat ${currentConvId} confirmed to have VISIBLE "Your turn" badge - proceeding with reply`);
-    
     console.log('[AI Assistant] 🚀 New incoming message detected! Starting auto-reply...');
     isProcessingAuto = true;
 
@@ -2235,6 +2183,95 @@
       subtree: true
     });
   }
+
+  /**
+   * Hook into fetch to intercept GraphQL responses and extract conversation data
+   */
+  (function hookGraphQLFetch() {
+    if (typeof window === 'undefined' || !window.fetch) return;
+    
+    const originalFetch = window.fetch;
+    window.fetch = async function(input, init) {
+      const response = await originalFetch.apply(this, arguments);
+      
+      try {
+        const url = typeof input === 'string' ? input : (input?.url || '');
+        if (!url || !url.includes('/graphql')) {
+          return response;
+        }
+        
+        // Clone response so we can read it without consuming it
+        const clonedResponse = response.clone();
+        
+        // Check if this is MutualInboxConversationHistory request
+        let requestBody = null;
+        if (init && init.body) {
+          requestBody = typeof init.body === 'string' ? init.body : JSON.stringify(init.body);
+        }
+        
+        if (requestBody && requestBody.includes('MutualInboxConversationHistory')) {
+          const json = await clonedResponse.json().catch(() => null);
+          
+          if (json?.data?.mutualInboxConversationHistory?.matchesHistory) {
+            const history = json.data.mutualInboxConversationHistory.matchesHistory;
+            
+            // Try to get conversation ID from current URL first
+            let convId = getConversationId();
+            
+            // Also try to extract userId from request body to match conversations
+            let requestUserId = null;
+            try {
+              if (requestBody) {
+                const reqJson = JSON.parse(requestBody);
+                requestUserId = reqJson?.variables?.userId;
+              }
+            } catch (_) {}
+            
+            // Use userId as fallback conversation identifier if URL-based ID not available
+            if (!convId && requestUserId) {
+              convId = requestUserId;
+            }
+            
+            // Extract partner name (handle) - store by both convId and userId for lookup
+            if (history.handle) {
+              if (convId) {
+                partnerNamesByConversation[convId] = history.handle;
+                console.log(`[AI Assistant] 📛 Extracted partner name from GraphQL: "${history.handle}" for conversation ${convId}`);
+              }
+              if (requestUserId && requestUserId !== convId) {
+                partnerNamesByConversation[requestUserId] = history.handle;
+              }
+            }
+            
+            // Extract messages from GraphQL response
+            if (history.items && Array.isArray(history.items)) {
+              const messages = history.items
+                .filter(item => item.type === 'Message' && item.message && item.message.trim())
+                .map(item => ({
+                  text: item.message,
+                  isOutgoing: item.direction === 'Sent',
+                  timestamp: new Date(item.sentDate).getTime()
+                }));
+              
+              if (messages.length > 0) {
+                // Store by conversation ID (URL-based) if available, otherwise by userId
+                const cacheKey = convId || requestUserId;
+                if (cacheKey) {
+                  gqlConversationCache[cacheKey] = messages;
+                  console.log(`[AI Assistant] 📋 Cached ${messages.length} messages from GraphQL for conversation ${cacheKey}`);
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // Silently ignore errors - don't break the page
+        console.warn('[AI Assistant] Error intercepting GraphQL response:', err);
+      }
+      
+      return response;
+    };
+  })();
 
   // Initialize when DOM is ready
   if (document.readyState === 'loading') {

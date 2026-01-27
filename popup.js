@@ -9,6 +9,9 @@
  * - CTA preferences
  */
 
+// Backend API URL (same one used by content script)
+const BACKEND_URL = 'https://match-ai-backend.onrender.com';
+
 document.addEventListener('DOMContentLoaded', () => {
   // Elements
   const statusEl = document.getElementById('status');
@@ -57,40 +60,75 @@ document.addEventListener('DOMContentLoaded', () => {
     ctaType: 'instagram'
   };
 
-  // Load settings from storage
-  function loadSettings() {
-    chrome.storage.local.get(['settings', 'breakState'], (result) => {
-      const settings = { ...DEFAULT_SETTINGS, ...result.settings };
+  // Load settings directly from backend API (MongoDB)
+  async function loadSettings() {
+    try {
+      const response = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/settings`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const settingsFromDB = await response.json();
+      console.log('[Popup] Settings from DB:', settingsFromDB);
+
+      // Merge DB settings into DEFAULT_SETTINGS so the "extension defaults"
+      // become whatever is stored in the database.
+      const mergedSettings = { ...DEFAULT_SETTINGS, ...settingsFromDB };
+      console.log('[Popup] Merged settings (applied as defaults):', mergedSettings);
+      Object.assign(DEFAULT_SETTINGS, mergedSettings);
+
+      // Use the merged/defaults (now seeded from DB) to populate the UI
+      autoModeEl.checked = DEFAULT_SETTINGS.autoMode;
+      autoSendEl.checked = DEFAULT_SETTINGS.autoSend;
+      replyDelayEl.value = DEFAULT_SETTINGS.replyDelayMin;
+      replyDelayMaxEl.value = DEFAULT_SETTINGS.replyDelayMax;
+      chatSwitchDelayEl.value = DEFAULT_SETTINGS.chatSwitchDelay || 30;
       
+      // Break mode
+      randomBreakModeEl.checked = DEFAULT_SETTINGS.randomBreakMode;
+      breakDurationMinEl.value = DEFAULT_SETTINGS.breakDurationMin;
+      breakDurationMaxEl.value = DEFAULT_SETTINGS.breakDurationMax;
+      breakIntervalMinEl.value = DEFAULT_SETTINGS.breakIntervalMin;
+      breakIntervalMaxEl.value = DEFAULT_SETTINGS.breakIntervalMax;
+      
+      // Social handles
+      instagramHandleEl.value = DEFAULT_SETTINGS.instagramHandle;
+      snapchatHandleEl.value = DEFAULT_SETTINGS.snapchatHandle;
+      ctaTypeEl.value = DEFAULT_SETTINGS.ctaType;
+      
+      updateUIVisibility();
+      
+      // Load break state from Chrome storage (break state is still local)
+      chrome.storage.local.get('breakState', (result) => {
+        if (result.breakState?.isOnBreak) {
+          updateBreakStatus(result.breakState);
+        }
+      });
+    } catch (error) {
+      console.error('Error loading settings from API:', error);
+      // Fallback to defaults if API fails
+      const settings = DEFAULT_SETTINGS;
       autoModeEl.checked = settings.autoMode;
       autoSendEl.checked = settings.autoSend;
       replyDelayEl.value = settings.replyDelayMin;
       replyDelayMaxEl.value = settings.replyDelayMax;
       chatSwitchDelayEl.value = settings.chatSwitchDelay || 30;
-      
-      // Break mode
       randomBreakModeEl.checked = settings.randomBreakMode;
       breakDurationMinEl.value = settings.breakDurationMin;
       breakDurationMaxEl.value = settings.breakDurationMax;
       breakIntervalMinEl.value = settings.breakIntervalMin;
       breakIntervalMaxEl.value = settings.breakIntervalMax;
-      
-      // Social handles
       instagramHandleEl.value = settings.instagramHandle;
       snapchatHandleEl.value = settings.snapchatHandle;
       ctaTypeEl.value = settings.ctaType;
-      
       updateUIVisibility();
-      
-      // Show break status if on break
-      if (result.breakState?.isOnBreak) {
-        updateBreakStatus(result.breakState);
-      }
-    });
+    }
   }
 
-  // Save settings to storage
-  function saveSettings() {
+  // Save settings directly to backend API (MongoDB)
+  async function saveSettings() {
     const settings = {
       autoMode: autoModeEl.checked,
       autoSend: autoSendEl.checked,
@@ -127,7 +165,19 @@ document.addEventListener('DOMContentLoaded', () => {
       settings.breakIntervalMax = settings.breakIntervalMin + 15;
     }
 
-    chrome.storage.local.set({ settings }, () => {
+    try {
+      const response = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/settings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(settings)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       // Show saved feedback
       saveBtnEl.textContent = '✓ Saved!';
       saveBtnEl.classList.add('saved');
@@ -148,16 +198,17 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         }
       });
-    });
-  }
-
-  // Auto-save (debounced) so toggles take effect immediately
-  let autoSaveTimer = null;
-  function scheduleAutoSave() {
-    if (autoSaveTimer) clearTimeout(autoSaveTimer);
-    autoSaveTimer = setTimeout(() => {
-      saveSettings();
-    }, 250);
+    } catch (error) {
+      console.error('Error saving settings to API:', error);
+      // Show error feedback
+      saveBtnEl.textContent = '✗ Error!';
+      saveBtnEl.classList.add('saved');
+      
+      setTimeout(() => {
+        saveBtnEl.textContent = 'Save Settings';
+        saveBtnEl.classList.remove('saved');
+      }, 2000);
+    }
   }
 
   // Update UI visibility based on auto mode
@@ -224,26 +275,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     updateUIVisibility();
     checkStatus();
-    scheduleAutoSave();
   });
   
   randomBreakModeEl.addEventListener('change', () => {
     updateUIVisibility();
     checkStatus();
-    scheduleAutoSave();
   });
 
-  autoSendEl.addEventListener('change', scheduleAutoSave);
-  replyDelayEl.addEventListener('change', scheduleAutoSave);
-  replyDelayMaxEl.addEventListener('change', scheduleAutoSave);
-  chatSwitchDelayEl.addEventListener('change', scheduleAutoSave);
-  breakDurationMinEl.addEventListener('change', scheduleAutoSave);
-  breakDurationMaxEl.addEventListener('change', scheduleAutoSave);
-  breakIntervalMinEl.addEventListener('change', scheduleAutoSave);
-  breakIntervalMaxEl.addEventListener('change', scheduleAutoSave);
-  instagramHandleEl.addEventListener('change', scheduleAutoSave);
-  snapchatHandleEl.addEventListener('change', scheduleAutoSave);
-  ctaTypeEl.addEventListener('change', scheduleAutoSave);
+  // All other controls only change UI until user clicks "Save Settings"
+  autoSendEl.addEventListener('change', updateUIVisibility);
+  replyDelayEl.addEventListener('change', () => {});
+  replyDelayMaxEl.addEventListener('change', () => {});
+  chatSwitchDelayEl.addEventListener('change', () => {});
+  breakDurationMinEl.addEventListener('change', () => {});
+  breakDurationMaxEl.addEventListener('change', () => {});
+  breakIntervalMinEl.addEventListener('change', () => {});
+  breakIntervalMaxEl.addEventListener('change', () => {});
+  instagramHandleEl.addEventListener('change', () => {});
+  snapchatHandleEl.addEventListener('change', () => {});
+  ctaTypeEl.addEventListener('change', () => {});
 
   saveBtnEl.addEventListener('click', saveSettings);
 
