@@ -15,7 +15,7 @@
 
   // Configuration
   const CONFIG = {
-    BACKEND_URL: 'https://match-ai-backend.onrender.com',
+    BACKEND_URL: 'https://chrome-extension-bjw9.onrender.com',
     MIN_TURNS_FOR_CTA: 3,
     MAX_TURNS_FOR_CTA: 4,
     MAX_MESSAGES_TO_SEND: 6,

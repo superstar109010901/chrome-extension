@@ -156,7 +156,9 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
     let reply = completion.choices[0]?.message?.content?.trim() || '';
     
     // Determine if this is a CTA (Instagram or Snapchat only)
-    const isCTA = shouldGenerateCTA && (
+    // Check if reply contains CTA keywords - if it does, ALWAYS apply invisible mode
+    // regardless of whether we explicitly requested a CTA
+    const containsCTAContent = (
       reply.toLowerCase().includes('instagram') ||
       reply.toLowerCase().includes('ig') ||
       reply.toLowerCase().includes('snap') ||
@@ -165,6 +167,11 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       (instagramHandle && reply.includes(instagramHandle)) ||
       (snapchatHandle && reply.includes(snapchatHandle))
     );
+    
+    // Mark as CTA if reply contains CTA keywords (always apply invisible mode)
+    // shouldGenerateCTA only controls whether we REQUEST a CTA, but if the AI
+    // generates one anyway, we still need to apply invisible mode
+    const isCTA = containsCTAContent;
 
     // If this is a CTA, add invisible Unicode characters between characters in the entire message.
     // This makes the CTA appear corrupted/invisible (invisible mode).
