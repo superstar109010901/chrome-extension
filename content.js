@@ -1607,14 +1607,89 @@
       console.log('[AI Assistant] ⚠️ No messages found in conversation');
     }
 
-    // CRITICAL: If messages array is empty, we can't determine turn status reliably.
-    // Don't switch away - wait and retry extraction (DOM might still be loading).
+    // CRITICAL: If messages array is empty, check if this is a new conversation
+    // If so, send a first greeting message
     if (messages.length === 0) {
-      console.log('[AI Assistant] ⚠️ No messages extracted yet; waiting before deciding to switch');
-      logSkipReason('no messages extracted yet');
-      // Push switch timer forward to give DOM time to render
-      nextAutoSwitchAt = Math.max(nextAutoSwitchAt, Date.now() + 3000);
-      return;
+      // Check if we've already sent a greeting to this conversation
+      const { turnCount } = await getTurnCount(currentConvId);
+      
+      if (turnCount === 0) {
+        // This is a brand new conversation - send first greeting
+        console.log('[AI Assistant] 💬 Empty conversation detected - sending first greeting');
+        isProcessingAuto = true;
+        
+        try {
+          // Update button to show processing
+          if (floatingButton) {
+            floatingButton.disabled = true;
+            floatingButton.textContent = '🤖 Generating greeting...';
+            floatingButton.classList.add('match-ai-reply-button--processing');
+          }
+
+          const partnerName = getPartnerDisplayName();
+          const greeting = await generateAIReply([], 0, false); // Empty messages, turnCount 0, no CTA
+          console.log('[AI Assistant] Got greeting:', greeting);
+          if (!isAutoSessionActive(session)) return;
+          
+          // Wait for human-like delay
+          const delay = getRandomDelay();
+          console.log(`[AI Assistant] Waiting ${delay}ms before typing greeting...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          if (!isAutoSessionActive(session)) return;
+          
+          // Re-find message input
+          messageInput = findMessageInput();
+          if (!messageInput) {
+            console.error('[AI Assistant] Message input lost!');
+            return;
+          }
+          if (!isAutoSessionActive(session)) return;
+          
+          // Insert greeting into input
+          insertReplyIntoInput(greeting);
+          console.log('[AI Assistant] Greeting inserted into input');
+          if (!isAutoSessionActive(session)) return;
+          
+          // Auto-send if enabled
+          if (settings.autoSend) {
+            await new Promise(resolve => setTimeout(resolve, 800));
+            if (!isAutoSessionActive(session)) return;
+            
+            const sent = clickSendButton();
+            if (sent) {
+              console.log('[AI Assistant] ✅ First greeting sent automatically!');
+              
+              // Update turn count
+              await incrementTurnCount(currentConvId);
+              lastReplyTime = Date.now();
+              lastConversationId = currentConvId;
+              
+              // Wait for DOM to update
+              await new Promise(resolve => setTimeout(resolve, 2500));
+              lastMessageHash = getMessagesHash();
+              repliedToInThisCycle.add(currentConvId);
+              
+              // Switch to next chat after greeting
+              const nextChatId = findNextYourTurnConversationId(currentConvId, true);
+              if (nextChatId) {
+                autoSwitchToNextChat(currentConvId);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('[AI Assistant] Error sending greeting:', error);
+        } finally {
+          isProcessingAuto = false;
+          restoreButtonState();
+        }
+        return;
+      } else {
+        // Messages empty but we've already sent something - wait for DOM to load
+        console.log('[AI Assistant] ⚠️ No messages extracted yet; waiting before deciding to switch');
+        logSkipReason('no messages extracted yet');
+        nextAutoSwitchAt = Math.max(nextAutoSwitchAt, Date.now() + 3000);
+        return;
+      }
     }
     
     // CRITICAL CHECK: If we just replied to this conversation, don't reply again - switch instead

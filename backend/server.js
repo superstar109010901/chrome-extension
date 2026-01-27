@@ -95,6 +95,9 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
 
   const { instagramHandle, snapchatHandle, ctaType, partnerName } = socialHandles;
 
+  // Check if this is an empty conversation (no messages yet)
+  const isEmptyConversation = !messages || messages.length === 0;
+
   // Build conversation context
   const conversationHistory = messages.map(msg => {
     return {
@@ -136,13 +139,23 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
   }
 
   // Build messages for API
+  let userPrompt;
+  if (isEmptyConversation) {
+    // First greeting for empty conversation
+    userPrompt = partnerName && typeof partnerName === 'string' && partnerName.trim()
+      ? `Generate a friendly first greeting message for ${partnerName.trim()}. Keep it short, casual, and engaging.`
+      : 'Generate a friendly first greeting message. Keep it short, casual, and engaging.';
+    systemPrompt += `\n\nThis is the FIRST message in a new conversation. Generate an opening greeting that is friendly, casual, and inviting.`;
+  } else if (shouldGenerateCTA) {
+    userPrompt = 'Generate a short reply that naturally suggests moving off the app.';
+  } else {
+    userPrompt = `Generate a short, casual reply that directly responds to their last message: "${lastIncoming || ''}"`;
+  }
+
   const messagesForAPI = [
     { role: 'system', content: systemPrompt },
     ...conversationHistory,
-    { role: 'user', content: shouldGenerateCTA 
-      ? 'Generate a short reply that naturally suggests moving off the app.'
-      : `Generate a short, casual reply that directly responds to their last message: "${lastIncoming || ''}"` 
-    }
+    { role: 'user', content: userPrompt }
   ];
 
   try {
@@ -241,11 +254,14 @@ app.post('/generate-reply', async (req, res) => {
     } = req.body;
 
     // Validation
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ 
         error: 'Invalid request: messages array is required' 
       });
     }
+    
+    // Allow empty messages array for first greeting (new conversation)
+    // Empty array means no messages yet - we'll generate a greeting
 
     if (typeof turnCount !== 'number' || turnCount < 0) {
       return res.status(400).json({ 
