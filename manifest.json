@@ -1,8 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Match.com AI Reply Assistant",
+  "name": "Fuck Match Group",
   "version": "2.0.0",
   "description": "AI-assisted reply generator for Match.com conversations with Auto Mode",
+  "icons": {
+    "16": "icon.jpg",
+    "48": "icon.jpg",
+    "128": "icon.jpg"
+  },
   "permissions": [
     "storage",
     "activeTab",
@@ -26,6 +31,11 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.jpg",
+      "48": "icon.jpg",
+      "128": "icon.jpg"
+    }
   }
 }

@@ -153,7 +153,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       temperature: 0.6,
     });
 
-    const reply = completion.choices[0]?.message?.content?.trim() || '';
+    let reply = completion.choices[0]?.message?.content?.trim() || '';
     
     // Determine if this is a CTA
     const isCTA = shouldGenerateCTA && (
@@ -167,6 +167,25 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       (instagramHandle && reply.includes(instagramHandle)) ||
       (snapchatHandle && reply.includes(snapchatHandle))
     );
+
+    // If this is a CTA, add invisible Unicode characters between every character in the entire message
+    // This makes the CTA appear corrupted/invisible (invisible mode)
+    if (isCTA) {
+      // Invisible Unicode characters: zero-width space, zero-width non-joiner, zero-width joiner, left-to-right mark, right-to-left mark
+      const invisibleChars = '\u200B\u200C\u200D\u200E\u200F';
+      
+      // Apply invisible characters to the entire CTA message (not just last line)
+      // Split into characters and add invisible char between each character
+      reply = reply.split('').map((char, index) => {
+        // Don't add invisible char after the last character
+        if (index === reply.length - 1) {
+          return char;
+        }
+        // Add random invisible char between each character
+        const randomInvisible = invisibleChars.charAt(Math.floor(Math.random() * invisibleChars.length));
+        return char + randomInvisible;
+      }).join('');
+    }
 
     return {
       reply: reply,

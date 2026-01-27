@@ -15,7 +15,7 @@
 
   // Configuration
   const CONFIG = {
-    BACKEND_URL: 'https://4f2edc7b07be.ngrok-free.app',
+    BACKEND_URL: 'https://2c6e7e3d87c1.ngrok-free.app',
     MIN_TURNS_FOR_CTA: 3,
     MAX_TURNS_FOR_CTA: 4,
     MAX_MESSAGES_TO_SEND: 6,
@@ -636,7 +636,9 @@
             return id;
           }
         }
-        console.log('[AI Assistant] 🔄 All chats in sequence handled; rebuilding sequence');
+        // All chats in sequence have been replied to - reset cycle
+        console.log('[AI Assistant] 🔄 All chats in sequence handled; resetting cycle and rebuilding sequence');
+        repliedToInThisCycle.clear();
         return buildYourTurnChatSequence()[0] || null;
       }
 
@@ -651,7 +653,21 @@
         return nextId;
       }
       
-      // All others replied or only option was self — do not send user back to first; stay on current (return null)
+      // All others replied or only option was self — check if we've completed a full cycle
+      // If all chats in sequence have been replied to, reset cycle and start from beginning
+      const allReplied = excludeReplied && yourTurnChatSequence.every(id => 
+        id === currentConvId || repliedToInThisCycle.has(id)
+      );
+      
+      if (allReplied) {
+        // All chats have been handled - reset cycle and start from first
+        console.log('[AI Assistant] 🔄 All chats in sequence handled; resetting cycle and starting from first');
+        repliedToInThisCycle.clear();
+        const rebuilt = buildYourTurnChatSequence();
+        return rebuilt[0] || null;
+      }
+      
+      // Not all replied yet, but current position has no available next chat
       const rebuilt = buildYourTurnChatSequence();
       const firstId = rebuilt[0] || null;
       const currentReplied = excludeReplied && repliedToInThisCycle.has(currentConvId);
