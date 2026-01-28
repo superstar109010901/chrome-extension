@@ -399,8 +399,19 @@
       </div>
       <input type="password" class="input-field" id="openaiApiKey" placeholder="sk-...">
       <div class="toggle-sublabel" style="margin-top: 4px;">
-        Stored in the backend database. Leave blank to keep existing key; clear and save to remove.
+        Stored in the backend database. Leave blank to keep existing key.
       </div>
+    </div>
+
+    <div class="toggle-row" style="padding-top: 0;">
+      <div>
+        <div class="toggle-label">Remove API Key</div>
+        <div class="toggle-sublabel">Enable this to delete the key from DB on save</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="removeOpenaiApiKey">
+        <span class="toggle-slider"></span>
+      </label>
     </div>
   </div>
   </div>

@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const ctaTypeEl = document.getElementById('ctaType');
   const ctaAfterMessagesEl = document.getElementById('ctaAfterMessages');
   const openaiApiKeyEl = document.getElementById('openaiApiKey');
+  const removeOpenaiApiKeyEl = document.getElementById('removeOpenaiApiKey');
   const saveBtnEl = document.getElementById('saveBtn');
 
   // Swipe tab elements
@@ -121,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctaTypeEl.value = DEFAULT_SETTINGS.ctaType;
       ctaAfterMessagesEl.value = DEFAULT_SETTINGS.ctaAfterMessages ?? 3;
       openaiApiKeyEl.value = DEFAULT_SETTINGS.openaiApiKey || '';
+      if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
       // Swipe
       swipeEnabledEl.checked = DEFAULT_SETTINGS.swipeEnabled;
       swipeLikePercentEl.value = DEFAULT_SETTINGS.swipeLikePercent ?? 50;
@@ -154,6 +156,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctaTypeEl.value = settings.ctaType;
       ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
       openaiApiKeyEl.value = settings.openaiApiKey || '';
+      if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
       swipeEnabledEl.checked = settings.swipeEnabled;
       swipeLikePercentEl.value = settings.swipeLikePercent ?? 50;
       swipeIntervalSecondsMinEl.value = settings.swipeIntervalSecondsMin ?? 4;
@@ -181,12 +184,23 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandle: snapchatHandleEl.value.trim(),
       ctaType: ctaTypeEl.value,
       ctaAfterMessages: parseInt(ctaAfterMessagesEl.value, 10),
-      openaiApiKey: openaiApiKeyEl.value.trim(),
       swipeEnabled: swipeEnabledEl.checked,
       swipeLikePercent: parseInt(swipeLikePercentEl.value, 10),
       swipeIntervalSecondsMin: parseInt(swipeIntervalSecondsMinEl.value, 10),
       swipeIntervalSecondsMax: parseInt(swipeIntervalSecondsMaxEl.value, 10)
     };
+
+    // OpenAI key behavior:
+    // - If "Remove API Key" is checked: explicitly delete it by sending empty string.
+    // - Else if user typed a key: send it.
+    // - Else (blank): do NOT send openaiApiKey field (backend will keep existing DB value).
+    const removeKey = !!(removeOpenaiApiKeyEl && removeOpenaiApiKeyEl.checked);
+    const typedKey = (openaiApiKeyEl?.value || '').trim();
+    if (removeKey) {
+      settings.openaiApiKey = '';
+    } else if (typedKey) {
+      settings.openaiApiKey = typedKey;
+    }
 
     if (!Number.isFinite(settings.ctaAfterMessages) || settings.ctaAfterMessages < 0) settings.ctaAfterMessages = 0;
     if (settings.ctaAfterMessages > 50) settings.ctaAfterMessages = 50;

@@ -20,17 +20,10 @@ app.use(express.json());
 // Connect to MongoDB on startup
 connectDB().catch(console.error);
 
-// OpenAI client (will prefer DB-stored key; env as fallback)
-let openai = null;
+// OpenAI client (DB-stored key only)
 let OpenAIClass = null;
 try {
   OpenAIClass = require('openai');
-  // Keep a best-effort client with env key (fallback if DB key missing)
-  if (process.env.OPENAI_API_KEY) {
-    openai = new OpenAIClass({
-      apiKey: process.env.OPENAI_API_KEY
-    });
-  }
 } catch (error) {
   console.warn('OpenAI package not installed. Install with: npm install openai');
 }
@@ -102,11 +95,10 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   const settingsDoc = await settingsCollection.findOne({});
   const effectiveSettings = normalizeSettings(settingsDoc || {});
   const apiKeyFromDb = effectiveSettings.openaiApiKey && effectiveSettings.openaiApiKey.trim();
-  const apiKeyToUse = apiKeyFromDb || process.env.OPENAI_API_KEY;
-  if (!apiKeyToUse) {
-    throw new Error('OpenAI API key not configured (DB openaiApiKey missing and OPENAI_API_KEY env not set)');
+  if (!apiKeyFromDb) {
+    throw new Error('OpenAI API key not configured in database (openaiApiKey is empty)');
   }
-  const openaiClient = new OpenAIClass({ apiKey: apiKeyToUse });
+  const openaiClient = new OpenAIClass({ apiKey: apiKeyFromDb });
 
 
   const { instagramHandle, snapchatHandle, ctaType, partnerName } = socialHandles;
@@ -534,17 +526,19 @@ app.post('/settings', async (req, res) => {
     const settingsCollection = await getSettingsCollection();
     const newSettings = req.body;
 
-    const settings = normalizeSettings(newSettings);
+    // Load existing settings (if any) so partial updates don't wipe fields
+    const existingDoc = await settingsCollection.findOne({});
+    const existingSettings = existingDoc ? normalizeSettings(existingDoc) : null;
+
+    // If the client didn't send a field (e.g., openaiApiKey), keep the existing value.
+    const mergedInput = existingSettings ? { ...existingSettings, ...newSettings } : newSettings;
+    const settings = normalizeSettings(mergedInput);
 
     // Helper: shallow equality between two settings objects
     const settingsEqual = (a, b) => {
       const keys = Object.keys(DEFAULT_SETTINGS);
       return keys.every((k) => a[k] === b[k]);
     };
-
-    // Load existing settings (if any)
-    const existingDoc = await settingsCollection.findOne({});
-    const existingSettings = existingDoc ? normalizeSettings(existingDoc) : null;
 
     // PROTECTION:
     // If DB already has non-default settings and the incoming payload is *exactly* the defaults,
@@ -614,10 +608,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Match.com AI Reply Assistant API v2.0 running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/health`);
   console.log(`✨ Features: Auto mode, Custom social handles for CTA`);
-  
-  if (!process.env.OPENAI_API_KEY) {
-    console.warn('⚠️  WARNING: OPENAI_API_KEY not set in .env file');
-  }
 });
 
 module.exports = app;
