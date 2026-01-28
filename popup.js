@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const snapchatHandleEl = document.getElementById('snapchatHandle');
   const ctaTypeEl = document.getElementById('ctaType');
   const ctaAfterMessagesEl = document.getElementById('ctaAfterMessages');
+  const openaiApiKeyEl = document.getElementById('openaiApiKey');
   const saveBtnEl = document.getElementById('saveBtn');
 
   // Swipe tab elements
@@ -72,6 +73,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ctaType: 'instagram',
     // CTA timing
     ctaAfterMessages: 3,
+    // OpenAI API key (stored in DB)
+    openaiApiKey: '',
     // Swipe settings
     swipeEnabled: false,
     swipeLikePercent: 50,
@@ -117,6 +120,7 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandleEl.value = DEFAULT_SETTINGS.snapchatHandle;
       ctaTypeEl.value = DEFAULT_SETTINGS.ctaType;
       ctaAfterMessagesEl.value = DEFAULT_SETTINGS.ctaAfterMessages ?? 3;
+      openaiApiKeyEl.value = DEFAULT_SETTINGS.openaiApiKey || '';
       // Swipe
       swipeEnabledEl.checked = DEFAULT_SETTINGS.swipeEnabled;
       swipeLikePercentEl.value = DEFAULT_SETTINGS.swipeLikePercent ?? 50;
@@ -149,6 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandleEl.value = settings.snapchatHandle;
       ctaTypeEl.value = settings.ctaType;
       ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
+      openaiApiKeyEl.value = settings.openaiApiKey || '';
       swipeEnabledEl.checked = settings.swipeEnabled;
       swipeLikePercentEl.value = settings.swipeLikePercent ?? 50;
       swipeIntervalSecondsMinEl.value = settings.swipeIntervalSecondsMin ?? 4;
@@ -176,6 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandle: snapchatHandleEl.value.trim(),
       ctaType: ctaTypeEl.value,
       ctaAfterMessages: parseInt(ctaAfterMessagesEl.value, 10),
+      openaiApiKey: openaiApiKeyEl.value.trim(),
       swipeEnabled: swipeEnabledEl.checked,
       swipeLikePercent: parseInt(swipeLikePercentEl.value, 10),
       swipeIntervalSecondsMin: parseInt(swipeIntervalSecondsMinEl.value, 10),

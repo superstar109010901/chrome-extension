@@ -20,13 +20,17 @@ app.use(express.json());
 // Connect to MongoDB on startup
 connectDB().catch(console.error);
 
-// OpenAI client
-let openai;
+// OpenAI client (will prefer DB-stored key; env as fallback)
+let openai = null;
+let OpenAIClass = null;
 try {
-  const OpenAI = require('openai');
-  openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-  });
+  OpenAIClass = require('openai');
+  // Keep a best-effort client with env key (fallback if DB key missing)
+  if (process.env.OPENAI_API_KEY) {
+    openai = new OpenAIClass({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+  }
 } catch (error) {
   console.warn('OpenAI package not installed. Install with: npm install openai');
 }
@@ -89,9 +93,20 @@ ${examples.join('\n')}`;
  * Generate AI reply based on conversation context
  */
 async function generateReply(messages, turnCount, requestCTA, socialHandles = {}) {
-  if (!openai) {
-    throw new Error('OpenAI client not initialized. Check OPENAI_API_KEY in .env');
+  if (!OpenAIClass) {
+    throw new Error('OpenAI client not available. Install the openai package.');
   }
+
+  // Load settings to get OpenAI API key (DB preferred)
+  const settingsCollection = await getSettingsCollection();
+  const settingsDoc = await settingsCollection.findOne({});
+  const effectiveSettings = normalizeSettings(settingsDoc || {});
+  const apiKeyFromDb = effectiveSettings.openaiApiKey && effectiveSettings.openaiApiKey.trim();
+  const apiKeyToUse = apiKeyFromDb || process.env.OPENAI_API_KEY;
+  if (!apiKeyToUse) {
+    throw new Error('OpenAI API key not configured (DB openaiApiKey missing and OPENAI_API_KEY env not set)');
+  }
+  const openaiClient = new OpenAIClass({ apiKey: apiKeyToUse });
 
 
   const { instagramHandle, snapchatHandle, ctaType, partnerName } = socialHandles;
@@ -253,7 +268,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
 
   try {
     // First attempt
-    const completion = await openai.chat.completions.create({
+    const completion = await openaiClient.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       messages: baseMessagesForAPI,
       max_tokens: 60,
@@ -288,7 +303,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
         { role: 'user', content: userPrompt }
       ];
 
-      const completion2 = await openai.chat.completions.create({
+      const completion2 = await openaiClient.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
         messages: dedupMessagesForAPI,
         max_tokens: 60,
@@ -430,6 +445,8 @@ const DEFAULT_SETTINGS = {
   // CTA timing: request CTA after you have sent this many messages in that chat
   // 0 means "allow anytime"
   ctaAfterMessages: 3,
+  // OpenAI API key (stored in DB; used in preference to env)
+  openaiApiKey: '',
   // Swipe settings
   swipeEnabled: false,
   swipeLikePercent: 50,
@@ -466,6 +483,7 @@ const normalizeSettings = (src = {}) => {
     snapchatHandle: src.snapchatHandle ?? DEFAULT_SETTINGS.snapchatHandle,
     ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType,
     ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
+    openaiApiKey: src.openaiApiKey ?? DEFAULT_SETTINGS.openaiApiKey,
     swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,
     swipeLikePercent: src.swipeLikePercent ?? DEFAULT_SETTINGS.swipeLikePercent,
     swipeIntervalSecondsMin: swipeIntervalSecondsMin ?? DEFAULT_SETTINGS.swipeIntervalSecondsMin,

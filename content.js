@@ -409,6 +409,51 @@
   }
 
   /**
+   * Detect if ANY CTA info exists anywhere in the full chat history (either side).
+   * If true, we should not reply anymore to this conversation.
+   *
+   * CTA info includes: Instagram/IG, Snapchat/Snap, @handles, phone-like numbers,
+   * or clear "add me / dm me" invitations.
+   */
+  function chatHistoryContainsAnyCTA(messages) {
+    if (!messages || !messages.length) return false;
+    const allText = messages.map(m => (m.text || '')).join(' ').trim();
+    if (!allText) return false;
+
+    // Basic signals
+    const hasAtHandle = /@[\w.]{2,}/.test(allText);
+    const hasInstagram = /\b(instagram|ig)\b/i.test(allText);
+    const hasSnapchat = /\b(snapchat|snap)\b/i.test(allText);
+
+    // Phone-like: allow spaces/dashes/parentheses; require ~10+ digits total
+    const hasPhoneLike =
+      /(\+?\d[\d\s().-]{7,}\d)/.test(allText) &&
+      ((allText.match(/\d/g) || []).length >= 10);
+
+    // Clear invitation intent
+    const hasInviteIntent =
+      /\b(add|dm|message|msg|text|call)\s+me\b/i.test(allText) ||
+      /\b(hit\s+me\s+up)\b/i.test(allText) ||
+      /\b(let'?s|lets)\s+(chat|talk)\b/i.test(allText);
+
+    // Strong patterns that indicate sharing CTA info (either side)
+    const strongPatterns = [
+      /\b(my\s+)?(ig|instagram)\s*(is|:)?\s*[@\w.-]{3,}/i,
+      /\b(my\s+)?(snap|snapchat)\s*(is|:)?\s*[\w.-]{3,}/i,
+      /\badd\s+me\s+on\s+(snap|snapchat|ig|instagram)\b/i,
+      /\bfind\s+me\s+on\s+(snap|snapchat|ig|instagram)\b/i,
+      /\bmine\s+is\s+[@\w.-]{3,}/i
+    ];
+
+    if (strongPatterns.some(re => re.test(allText))) return true;
+    if (hasAtHandle && (hasInstagram || hasSnapchat || hasInviteIntent)) return true;
+    if (hasInstagram || hasSnapchat) return true;
+    if (hasPhoneLike) return true;
+
+    return false;
+  }
+
+  /**
    * Query selector in document and inside shadow roots
    */
   function queryOne(selector, root = document) {
@@ -1832,21 +1877,11 @@
     // PRIORITY 1: If it's our turn AND we have "Your turn" badge, ALWAYS try to reply (never switch away)
     // Note: hasYourTurnBadge is already verified above - if false, we would have returned early
     if (shouldReply) {
-      // CRITICAL: If they already shared their CTA (IG/Snap/phone), don't reply anymore – switch to next immediately
-      if (conversationsWhereTheySharedCTA.has(currentConvId)) {
-        console.log(`[AI Assistant] 🚫 They shared their CTA earlier – not replying. Switching to next chat.`);
-        logSkipReason('user already shared their own CTA earlier in this chat');
-        const nextChatId = findNextYourTurnConversationId(currentConvId, true);
-        if (nextChatId) {
-          autoSwitchToNextChat(currentConvId);
-        }
-        return;
-      }
-      // CRITICAL: Check if they just shared their CTA in current messages - if so, mark and switch immediately
-      if (messages.length > 0 && incomingMessagesContainTheirCTA(messages)) {
+      // CRITICAL: If ANY CTA info exists in the chat history (either side), do not reply anymore.
+      if (conversationsWhereTheySharedCTA.has(currentConvId) || (messages.length > 0 && chatHistoryContainsAnyCTA(messages))) {
         conversationsWhereTheySharedCTA.add(currentConvId);
-        console.log(`[AI Assistant] 🚫 They shared their CTA (Instagram/Snap/number) – not replying anymore. Switching to next chat.`);
-        logSkipReason('this incoming message contains their CTA (Instagram/Snap/number)');
+        console.log(`[AI Assistant] 🚫 CTA detected in chat history – not replying. Switching to next chat.`);
+        logSkipReason('CTA info exists in chat history (IG/Snap/phone/handle) — skipping replies for this conversation');
         const nextChatId = findNextYourTurnConversationId(currentConvId, true);
         if (nextChatId) {
           autoSwitchToNextChat(currentConvId);
