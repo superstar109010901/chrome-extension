@@ -16,8 +16,6 @@
   // Configuration
   const CONFIG = {
     BACKEND_URL: 'https://chrome-extension-bjw9.onrender.com',
-    MIN_TURNS_FOR_CTA: 3,
-    MAX_TURNS_FOR_CTA: 4,
     MAX_MESSAGES_TO_SEND: 6,
     POLL_INTERVAL: 2000,
     AUTO_CHECK_INTERVAL: 2000, // Check for new messages every 2 seconds in auto mode
@@ -87,8 +85,20 @@
     // Social handles
     instagramHandle: '',
     snapchatHandle: '',
-    ctaType: 'instagram'
+    ctaType: 'instagram',
+    // CTA timing: request CTA after you have sent this many messages in that chat
+    // 0 means "allow anytime"
+    ctaAfterMessages: 3,
+    // Swipe settings
+    swipeEnabled: false,
+    swipeLikePercent: 50,
+    swipeIntervalSeconds: 6
   };
+
+  // Swipe state
+  let swipeIntervalId = null;
+  let swipeSessionId = 0;
+  let isSwiping = false;
 
   /**
    * Get random number between min and max
@@ -272,6 +282,7 @@
       // Update settings from the message
       settings = { ...settings, ...request.settings };
       updateAutoMode();
+      updateSwipeMode();
       sendResponse({ success: true });
       return true; // Keep channel open for async response
     }
@@ -413,6 +424,135 @@
       }
     } catch (_) {}
     return out;
+  }
+
+  /**
+   * Detect if we are on the Discover swipe page (/home)
+   */
+  function isDiscoverPage() {
+    try {
+      const path = (window.location.pathname || '').toLowerCase();
+      return path === '/home' || path.startsWith('/home/');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Utility to choose a visible button by text (case-insensitive)
+   */
+  function findButtonByText(text, options = {}) {
+    const label = text.toLowerCase();
+    const candidates = queryAll('button, [role="button"], input[type="button"], input[type="submit"]');
+    for (const el of candidates) {
+      try {
+        const t = ((el.textContent || el.value || '') + '').trim().toLowerCase();
+        if (!t) continue;
+        if (options.exact) {
+          if (t === label) return el;
+        } else {
+          if (t.includes(label)) return el;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Perform a single swipe decision on Discover page:
+   * - With probability swipeLikePercent%, click "Like"
+   * - Otherwise click "Skip"
+   * After Liking, click "Next profile" or "Skip" if such buttons appear.
+   */
+  async function performSwipeTick(sessionIdForCall) {
+    if (!settings.swipeEnabled) return;
+    if (!isDiscoverPage()) return;
+    if (sessionIdForCall !== swipeSessionId) return;
+    if (isSwiping) return;
+
+    isSwiping = true;
+    try {
+      const likePercent = Math.min(100, Math.max(0, Number(settings.swipeLikePercent) || 0));
+      const shouldLike = Math.random() * 100 < likePercent;
+
+      console.log(`[AI Assistant] [Swipe] Tick on Discover – decision=${shouldLike ? 'LIKE' : 'SKIP'} (target like %: ${likePercent}%)`);
+
+      const likeButton = findButtonByText('like', { exact: false });
+      const skipButton = findButtonByText('skip', { exact: false });
+
+      if (!likeButton && !skipButton) {
+        console.log('[AI Assistant] [Swipe] No Like/Skip buttons found on page – waiting for profile card.');
+        return;
+      }
+
+      if (shouldLike && likeButton) {
+        likeButton.click();
+        console.log('[AI Assistant] [Swipe] Clicked Like on current profile.');
+        // Wait briefly for any post-like dialog (e.g. "Next profile", "Skip") to appear
+        await new Promise((r) => setTimeout(r, 1500));
+
+        const nextProfileButton = findButtonByText('next profile', { exact: false });
+        const postLikeSkip = findButtonByText('skip', { exact: false });
+
+        if (nextProfileButton) {
+          nextProfileButton.click();
+          console.log('[AI Assistant] [Swipe] Clicked Next profile after Like.');
+        } else if (postLikeSkip) {
+          postLikeSkip.click();
+          console.log('[AI Assistant] [Swipe] Clicked Skip after Like (no Next profile button).');
+        }
+      } else if (!shouldLike && skipButton) {
+        skipButton.click();
+        console.log('[AI Assistant] [Swipe] Clicked Skip (decided not to Like).');
+      } else if (shouldLike && !likeButton && skipButton) {
+        // Fallback: if Like button is missing but Skip is available, at least move to next profile
+        skipButton.click();
+        console.log('[AI Assistant] [Swipe] Like requested but Like button missing – clicked Skip instead.');
+      }
+    } catch (err) {
+      console.error('[AI Assistant] [Swipe] Error during swipe tick:', err);
+    } finally {
+      isSwiping = false;
+    }
+  }
+
+  /**
+   * Start/stop swipe automation based on settings and current page.
+   */
+  function updateSwipeMode() {
+    swipeSessionId++;
+
+    if (swipeIntervalId) {
+      clearInterval(swipeIntervalId);
+      swipeIntervalId = null;
+    }
+
+    if (!settings.swipeEnabled) {
+      console.log('[AI Assistant] [Swipe] Swipe mode disabled in settings.');
+      return;
+    }
+
+    if (!isDiscoverPage()) {
+      console.log('[AI Assistant] [Swipe] Not on Discover page (/home) – swipe mode idle.');
+      return;
+    }
+
+    const intervalMs = Math.min(
+      60000,
+      Math.max(2000, (Number(settings.swipeIntervalSeconds) || 6) * 1000)
+    );
+
+    const sessionAtStart = swipeSessionId;
+    console.log(`[AI Assistant] [Swipe] Activating auto-swipe on Discover – every ${intervalMs} ms, like ~${settings.swipeLikePercent}% of profiles.`);
+    swipeIntervalId = setInterval(() => {
+      try {
+        performSwipeTick(sessionAtStart);
+      } catch (err) {
+        console.error('[AI Assistant] [Swipe] Error in interval handler:', err);
+      }
+    }, intervalMs);
   }
 
   /**
@@ -898,10 +1038,12 @@
    */
   async function generateAIReply(messages, turnCount, ctaSent) {
     try {
-      const shouldRequestCTA = 
+      // CTA timing is controlled by settings.ctaAfterMessages:
+      // request CTA once we have sent N messages in this chat (turnCount tracks our sent messages)
+      const ctaAfter = Number.isFinite(settings.ctaAfterMessages) ? settings.ctaAfterMessages : 3;
+      const shouldRequestCTA =
         !ctaSent &&
-        turnCount >= CONFIG.MIN_TURNS_FOR_CTA &&
-        turnCount <= CONFIG.MAX_TURNS_FOR_CTA;
+        turnCount >= Math.max(0, ctaAfter);
 
       const partnerName = getPartnerDisplayName();
       // Send FULL chat history (not limited) with explicit direction labels
@@ -1831,61 +1973,66 @@
    * Initialize the extension
    */
   async function init() {
-    if (!isMessagesPage()) {
-      return;
-    }
-
-    // Load settings first
+    // Always load settings first (for both chat and swipe modes)
     await loadSettings();
 
-    messageInput = findMessageInput();
-    
-    if (!messageInput) {
-      setTimeout(init, CONFIG.POLL_INTERVAL);
-      return;
-    }
-
-    createFloatingButton();
-    updateAutoMode();
-
-    if (observer) {
-      observer.disconnect();
-    }
-
-    observer = new MutationObserver(() => {
-      // Re-find message input if lost
-      if (!messageInput || !document.body.contains(messageInput)) {
-        messageInput = findMessageInput();
-        if (messageInput && settings.autoMode) {
-          console.log('[AI Assistant] Message input re-found');
-        }
-      }
+    // Chat features only apply on messages page
+    if (isMessagesPage()) {
+      messageInput = findMessageInput();
       
-      // Check for conversation change
-      const newConversationId = getConversationId();
-      if (newConversationId !== currentConversationId) {
-        console.log('[AI Assistant] Conversation changed:', newConversationId);
-        currentConversationId = newConversationId;
-        lastMessageHash = ''; // Reset hash for new conversation
-        isProcessingAuto = false; // Reset processing state
-        
-        // Note: We keep lastConversationId to detect conversation switches
-        // It will be updated when we actually reply to this new conversation
-        
-        // Re-initialize auto mode for new conversation
-        if (settings.autoMode) {
-          setTimeout(() => {
-            lastMessageHash = getMessagesHash();
-            console.log('[AI Assistant] New conversation hash:', lastMessageHash.substring(0, 50));
-          }, 500);
-        }
+      if (!messageInput) {
+        setTimeout(init, CONFIG.POLL_INTERVAL);
+        return;
       }
-    });
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
+      createFloatingButton();
+      updateAutoMode();
+
+      if (observer) {
+        observer.disconnect();
+      }
+
+      observer = new MutationObserver(() => {
+        // Re-find message input if lost
+        if (!messageInput || !document.body.contains(messageInput)) {
+          messageInput = findMessageInput();
+          if (messageInput && settings.autoMode) {
+            console.log('[AI Assistant] Message input re-found');
+          }
+        }
+        
+        // Check for conversation change
+        const newConversationId = getConversationId();
+        if (newConversationId !== currentConversationId) {
+          console.log('[AI Assistant] Conversation changed:', newConversationId);
+          currentConversationId = newConversationId;
+          lastMessageHash = ''; // Reset hash for new conversation
+          isProcessingAuto = false; // Reset processing state
+          
+          // Note: We keep lastConversationId to detect conversation switches
+          // It will be updated when we actually reply to this new conversation
+          
+          // Re-initialize auto mode for new conversation
+          if (settings.autoMode) {
+            setTimeout(() => {
+              lastMessageHash = getMessagesHash();
+              console.log('[AI Assistant] New conversation hash:', lastMessageHash.substring(0, 50));
+            }, 500);
+          }
+        }
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+    } else {
+      // If not on messages page, ensure auto mode timers are stopped
+      updateAutoMode();
+    }
+
+    // Swipe mode only applies on Discover (/home)
+    updateSwipeMode();
   }
 
   /**

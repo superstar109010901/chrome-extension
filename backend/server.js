@@ -324,7 +324,14 @@ const DEFAULT_SETTINGS = {
   breakIntervalMax: 75,
   instagramHandle: '',
   snapchatHandle: '',
-  ctaType: 'instagram'
+  ctaType: 'instagram',
+  // CTA timing: request CTA after you have sent this many messages in that chat
+  // 0 means "allow anytime"
+  ctaAfterMessages: 3,
+  // Swipe settings
+  swipeEnabled: false,
+  swipeLikePercent: 50,
+  swipeIntervalSeconds: 6
 };
 
 /**
@@ -381,7 +388,11 @@ app.post('/settings', async (req, res) => {
       breakIntervalMax: src.breakIntervalMax ?? DEFAULT_SETTINGS.breakIntervalMax,
       instagramHandle: src.instagramHandle ?? DEFAULT_SETTINGS.instagramHandle,
       snapchatHandle: src.snapchatHandle ?? DEFAULT_SETTINGS.snapchatHandle,
-      ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType
+      ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType,
+      ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
+      swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,
+      swipeLikePercent: src.swipeLikePercent ?? DEFAULT_SETTINGS.swipeLikePercent,
+      swipeIntervalSeconds: src.swipeIntervalSeconds ?? DEFAULT_SETTINGS.swipeIntervalSeconds
     });
 
     const settings = normalizeSettings(newSettings);

@@ -199,6 +199,37 @@
       color: #856404;
       margin-top: 10px;
     }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 4px;
+    }
+    .tab {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 12px;
+      border: none;
+      border-radius: 999px;
+      background: #f1f3f5;
+      color: #555;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+    }
+    .tab.active {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+      box-shadow: 0 2px 6px rgba(102, 126, 234, 0.35);
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -213,9 +244,15 @@
   <div class="status" id="status">
     Checking status...
   </div>
-  
-  <!-- Mode Section -->
-  <div class="section">
+
+  <div class="tabs">
+    <button class="tab active" data-tab="chat">Chat</button>
+    <button class="tab" data-tab="swipe">Swipe</button>
+  </div>
+
+  <div id="chatTab" class="tab-content active">
+    <!-- Mode Section -->
+    <div class="section">
     <div class="section-title">
       <span>⚡</span> Mode Settings
     </div>
@@ -268,8 +305,8 @@
     </div>
   </div>
   
-  <!-- Random Break Section -->
-  <div class="section" id="breakSection" style="display: none;">
+    <!-- Random Break Section -->
+    <div class="section" id="breakSection" style="display: none;">
     <div class="section-title">
       <span>☕</span> Random Break Mode
     </div>
@@ -311,11 +348,24 @@
       <span id="breakStatusText">☕ Currently on break...</span>
     </div>
   </div>
-  
-  <!-- Social Media Section -->
-  <div class="section">
+    
+    <!-- Social Media Section -->
+    <div class="section">
     <div class="section-title">
       <span>📱</span> CTA Settings
+    </div>
+
+    <div class="input-group">
+      <div class="input-label">
+        <span>⏱️</span> Send CTA after
+      </div>
+      <div class="delay-input">
+        <input type="number" class="input-field" id="ctaAfterMessages" min="0" max="50" value="3">
+        <span class="delay-unit">messages</span>
+      </div>
+      <div class="toggle-sublabel" style="margin-top: 4px;">
+        CTA can appear after you have sent this many messages in that chat. Set 0 to allow anytime.
+      </div>
     </div>
     
     <div class="input-group">
@@ -341,6 +391,53 @@
         <option value="snapchat">Snapchat</option>
         <option value="random">Random (Instagram or Snapchat)</option>
       </select>
+    </div>
+  </div>
+  </div>
+
+  <div id="swipeTab" class="tab-content">
+    <!-- Swipe Settings Section -->
+    <div class="section">
+      <div class="section-title">
+        <span>💘</span> Swipe Settings
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Auto Swipe on Discover</div>
+          <div class="toggle-sublabel">Automatically like/skip profiles on the Discover page (/home)</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="swipeEnabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="input-group">
+        <div class="input-label">
+          <span>🎯</span> Like Percentage
+        </div>
+        <div class="delay-input">
+          <input type="number" class="input-field" id="swipeLikePercent" min="0" max="100" value="50">
+          <span class="delay-unit">% of profiles to Like</span>
+        </div>
+        <div class="toggle-sublabel" style="margin-top: 4px;">
+          Example: 30% means the bot Likes about 3 out of every 10 profiles it sees, and Skips the rest.
+        </div>
+      </div>
+
+      <div class="input-group">
+        <div class="input-label">
+          <span>⏱️</span> Swipe Interval
+        </div>
+        <div class="delay-input">
+          <input type="number" class="input-field" id="swipeIntervalSeconds" min="2" max="60" value="6">
+          <span class="delay-unit">seconds between swipes</span>
+        </div>
+        <div class="toggle-sublabel" style="margin-top: 4px;">
+          Shorter intervals look more aggressive; longer intervals feel more human.
+        </div>
+      </div>
     </div>
   </div>
   

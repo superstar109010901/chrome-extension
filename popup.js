@@ -39,7 +39,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const instagramHandleEl = document.getElementById('instagramHandle');
   const snapchatHandleEl = document.getElementById('snapchatHandle');
   const ctaTypeEl = document.getElementById('ctaType');
+  const ctaAfterMessagesEl = document.getElementById('ctaAfterMessages');
   const saveBtnEl = document.getElementById('saveBtn');
+
+  // Swipe tab elements
+  const swipeEnabledEl = document.getElementById('swipeEnabled');
+  const swipeLikePercentEl = document.getElementById('swipeLikePercent');
+  const swipeIntervalSecondsEl = document.getElementById('swipeIntervalSeconds');
+  const tabs = Array.from(document.querySelectorAll('.tab'));
+  const tabContents = {
+    chat: document.getElementById('chatTab'),
+    swipe: document.getElementById('swipeTab')
+  };
 
   // Default settings
   const DEFAULT_SETTINGS = {
@@ -57,7 +68,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Social handles
     instagramHandle: '',
     snapchatHandle: '',
-    ctaType: 'instagram'
+    ctaType: 'instagram',
+    // CTA timing
+    ctaAfterMessages: 3,
+    // Swipe settings
+    swipeEnabled: false,
+    swipeLikePercent: 50,
+    swipeIntervalSeconds: 6
   };
 
   // Load settings directly from backend API (MongoDB)
@@ -97,6 +114,11 @@ document.addEventListener('DOMContentLoaded', () => {
       instagramHandleEl.value = DEFAULT_SETTINGS.instagramHandle;
       snapchatHandleEl.value = DEFAULT_SETTINGS.snapchatHandle;
       ctaTypeEl.value = DEFAULT_SETTINGS.ctaType;
+      ctaAfterMessagesEl.value = DEFAULT_SETTINGS.ctaAfterMessages ?? 3;
+      // Swipe
+      swipeEnabledEl.checked = DEFAULT_SETTINGS.swipeEnabled;
+      swipeLikePercentEl.value = DEFAULT_SETTINGS.swipeLikePercent ?? 50;
+      swipeIntervalSecondsEl.value = DEFAULT_SETTINGS.swipeIntervalSeconds ?? 6;
       
       updateUIVisibility();
       
@@ -123,6 +145,10 @@ document.addEventListener('DOMContentLoaded', () => {
       instagramHandleEl.value = settings.instagramHandle;
       snapchatHandleEl.value = settings.snapchatHandle;
       ctaTypeEl.value = settings.ctaType;
+      ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
+      swipeEnabledEl.checked = settings.swipeEnabled;
+      swipeLikePercentEl.value = settings.swipeLikePercent ?? 50;
+      swipeIntervalSecondsEl.value = settings.swipeIntervalSeconds ?? 6;
       updateUIVisibility();
     }
   }
@@ -144,8 +170,22 @@ document.addEventListener('DOMContentLoaded', () => {
       // Social handles
       instagramHandle: instagramHandleEl.value.trim(),
       snapchatHandle: snapchatHandleEl.value.trim(),
-      ctaType: ctaTypeEl.value
+      ctaType: ctaTypeEl.value,
+      ctaAfterMessages: parseInt(ctaAfterMessagesEl.value, 10),
+      swipeEnabled: swipeEnabledEl.checked,
+      swipeLikePercent: parseInt(swipeLikePercentEl.value, 10),
+      swipeIntervalSeconds: parseInt(swipeIntervalSecondsEl.value, 10)
     };
+
+    if (!Number.isFinite(settings.ctaAfterMessages) || settings.ctaAfterMessages < 0) settings.ctaAfterMessages = 0;
+    if (settings.ctaAfterMessages > 50) settings.ctaAfterMessages = 50;
+
+    // Validate swipe values
+    if (!Number.isFinite(settings.swipeLikePercent)) settings.swipeLikePercent = 50;
+    settings.swipeLikePercent = Math.min(100, Math.max(0, settings.swipeLikePercent));
+    if (!Number.isFinite(settings.swipeIntervalSeconds)) settings.swipeIntervalSeconds = 6;
+    if (settings.swipeIntervalSeconds < 2) settings.swipeIntervalSeconds = 2;
+    if (settings.swipeIntervalSeconds > 60) settings.swipeIntervalSeconds = 60;
 
     // Validate delay values
     if (settings.replyDelayMin < 1) settings.replyDelayMin = 1;
@@ -223,6 +263,31 @@ document.addEventListener('DOMContentLoaded', () => {
     breakSettingsRowEl.style.display = isBreakMode ? 'block' : 'none';
   }
 
+  // Simple tab switching between Chat / Swipe
+  function activateTab(tabName) {
+    tabs.forEach((btn) => {
+      const name = btn.getAttribute('data-tab');
+      const isActive = name === tabName;
+      if (isActive) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+    Object.entries(tabContents).forEach(([name, el]) => {
+      if (!el) return;
+      if (name === tabName) {
+        el.classList.add('active');
+      } else {
+        el.classList.remove('active');
+      }
+    });
+    // Persist last-selected tab for convenience
+    try {
+      chrome.storage.local.set({ popupActiveTab: tabName });
+    } catch (_) {}
+  }
+
   // Update break status display
   function updateBreakStatus(breakState) {
     if (breakState?.isOnBreak) {
@@ -295,6 +360,13 @@ document.addEventListener('DOMContentLoaded', () => {
   snapchatHandleEl.addEventListener('change', () => {});
   ctaTypeEl.addEventListener('change', () => {});
 
+  tabs.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const name = btn.getAttribute('data-tab') || 'chat';
+      activateTab(name);
+    });
+  });
+
   saveBtnEl.addEventListener('click', saveSettings);
 
   // Format Instagram handle
@@ -306,6 +378,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Initialize
+  // Restore last active tab (defaults to "chat")
+  chrome.storage.local.get('popupActiveTab', (result) => {
+    const tabName = result.popupActiveTab === 'swipe' ? 'swipe' : 'chat';
+    activateTab(tabName);
+  });
   loadSettings();
   checkStatus();
   
