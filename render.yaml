@@ -30,6 +30,6 @@ services:
 
       # Optional: override model or port if needed
       - key: OPENAI_MODEL
-        value: gpt-3.5-turbo
+        value: gpt-4.1-mini
       - key: PORT
         value: "3000"
