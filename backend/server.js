@@ -32,8 +32,6 @@ try {
  * Generate CTA message based on user's preferences and handles
  */
 function buildCTAInstruction(ctaType, instagramHandle, snapchatHandle) {
-  let ctaInstructions = '';
-  
   const hasInstagram = instagramHandle && instagramHandle.trim();
   const hasSnapchat = snapchatHandle && snapchatHandle.trim();
   
@@ -41,45 +39,50 @@ function buildCTAInstruction(ctaType, instagramHandle, snapchatHandle) {
   const insta = hasInstagram ? instagramHandle.trim() : '';
   const snap = hasSnapchat ? snapchatHandle.trim() : '';
   
-  switch (ctaType) {
-    case 'instagram':
-      ctaInstructions = `Suggest moving to Instagram. Include the handle "${insta}" in a natural way.
-Examples:
-- "Would love to keep chatting on Instagram! Find me at ${insta}"
-- "Let's move to IG! I'm ${insta}"
-- "Hit me up on Instagram ${insta}"`;
-      break;
-      
-    case 'snapchat':
-      ctaInstructions = `Suggest moving to Snapchat. Include the username "${snap}" naturally.
-Examples:
-- "Add me on Snap! ${snap}"
-- "Let's chat on Snapchat - ${snap}"
-- "My snap is ${snap}, add me!"`;
-      break;
-      
-    case 'random':
-    default:
-      // Build dynamic examples based on what handles are available (Instagram and Snapchat only)
-      const examples = [];
-      if (hasInstagram) {
-        examples.push(`- "Let's chat on Instagram! ${insta}"`);
-      }
-      if (hasSnapchat) {
-        examples.push(`- "Add me on Snap: ${snap}"`);
-      }
-      
-      // If no handles available, default to Instagram placeholder
-      if (examples.length === 0) {
-        examples.push(`- "Let's chat on Instagram! ${insta}"`);
-      }
-      
-      ctaInstructions = `Suggest moving the conversation off the app to Instagram or Snapchat. Choose one option naturally.
-${examples.join('\n')}`;
-      break;
+  // Determine which platform to use
+  let platform = '';
+  let username = '';
+  
+  if (ctaType === 'instagram' && hasInstagram) {
+    platform = 'instagram';
+    username = insta;
+  } else if (ctaType === 'snapchat' && hasSnapchat) {
+    platform = 'snapchat';
+    username = snap;
+  } else if (ctaType === 'random') {
+    // Random: prefer Instagram if both available, else use what's available
+    if (hasInstagram && hasSnapchat) {
+      platform = Math.random() < 0.5 ? 'instagram' : 'snapchat';
+      username = platform === 'instagram' ? insta : snap;
+    } else if (hasInstagram) {
+      platform = 'instagram';
+      username = insta;
+    } else if (hasSnapchat) {
+      platform = 'snapchat';
+      username = snap;
+    }
+  } else {
+    // Fallback to Instagram if specified but not available, or default
+    platform = 'instagram';
+    username = insta || snap; // Use whatever is available
   }
   
-  return ctaInstructions;
+  if (!username) {
+    return 'Generate a CTA suggesting moving to social media, but you do not have a handle configured yet.';
+  }
+  
+  // Use the exact template the user requested
+  const platformName = platform === 'instagram' ? 'instagram' : 'snapchat';
+  const ctaTemplate = `i am just new here just seeing whats out there but im rarely be on here can we take this over to ${platformName} - ${username}`;
+  
+  return `Your CTA message MUST follow this exact format:
+1. First, reply naturally to his latest message (respond to what he just said).
+2. Then, transition with this exact phrase: "${ctaTemplate}"
+
+Example structure:
+- [Your natural reply to his message] [transition phrase]
+
+The transition phrase makes you look more real and explains why you want to move off the app.`;
 }
 
 /**
@@ -100,7 +103,7 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   const openaiClient = new OpenAIClass({ apiKey: apiKeyFromDb });
 
 
-  const { instagramHandle, snapchatHandle, ctaType, partnerName } = socialHandles;
+  const { instagramHandle, snapchatHandle, ctaType, partnerName, ctaEnabled, ctaInvisibleChars } = socialHandles;
 
   // Check if this is an empty conversation (no messages yet)
   const isEmptyConversation = !messages || messages.length === 0;
@@ -122,7 +125,7 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   // The content script already decides WHEN to request a CTA based on
   // the user's "CTA after N messages" setting, so we simply trust
   // requestCTA here.
-  const shouldGenerateCTA = !!requestCTA;
+  const shouldGenerateCTA = !!requestCTA && ctaEnabled !== false;
 
   // Detect CTA content in a generated reply (so we can always apply invisible mode
   // whenever we share Instagram/Snapchat/handle info).
@@ -135,11 +138,11 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
     const instaNoAt = instaRaw.startsWith('@') ? instaRaw.slice(1) : instaRaw;
     const snapRaw = (snapchatHandle || '').trim();
 
-    // Direct handle match
+    // Direct handle match (check if username appears in reply)
     const handleCandidates = [instaRaw, instaNoAt, snapRaw]
       .filter(Boolean)
       .map((h) => h.toLowerCase());
-    if (handleCandidates.some((h) => lower.includes(h))) return true;
+    if (handleCandidates.some((h) => h && lower.includes(h))) return true;
 
     // Explicit platform mention (word-boundary safe: "ig" shouldn't match "right")
     const mentionsInstagram = /\b(instagram|ig)\b/i.test(raw);
@@ -151,10 +154,15 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
     // "add me / dm me / message me" style CTA intent
     const hasInviteIntent = /\b(add|dm|message|msg|hit)\s+me\b/i.test(raw) || /\b(let'?s|lets)\s+chat\b/i.test(raw);
 
+    // New template phrases: "can we take this over to", "rarely be on here", "take this over"
+    const hasTransitionPhrase = /\b(can\s+we\s+take\s+this\s+over|take\s+this\s+over|rarely\s+be\s+on\s+here)\b/i.test(raw);
+
     // If they mention IG/Snap or show an @handle, treat as CTA content
     if (hasAtHandle) return true;
     if (mentionsInstagram || mentionsSnapchat) return true;
     if (hasInviteIntent && (mentionsInstagram || mentionsSnapchat)) return true;
+    // New template detection: if it has transition phrase + platform mention
+    if (hasTransitionPhrase && (mentionsInstagram || mentionsSnapchat)) return true;
 
     return false;
   }
@@ -183,8 +191,10 @@ Conversation rules:
 
 CTA (moving off the app):
 - Only talk about Instagram or Snapchat when a CTA is explicitly requested by the system (requestCTA=true), or when he clearly asks for your social media.
-- When a CTA is requested, you MUST smoothly suggest moving the conversation to ONE platform (Instagram or Snapchat) using the exact handle provided in the system.
-- The CTA reply should be a single, short sentence that clearly invites him to add or message you there.
+- When a CTA is requested, your reply MUST have TWO parts:
+  1. First: Reply naturally to his latest message (respond to what he just said).
+  2. Then: Add the transition phrase provided in the system instructions.
+- This two-part structure makes you look more real and natural.
 - Keep CTA lines casual and not pushy.
 
 Formatting / technical rules:
@@ -241,7 +251,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       : 'This is a new conversation. Please make a natural, short first greeting message.';
     systemPrompt += `\n\nThis is the FIRST message in a new conversation. Generate an opening greeting that is friendly, casual, and inviting.`;
   } else if (shouldGenerateCTA) {
-    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response that also naturally suggests moving this chat to the requested platform (Instagram or Snapchat) using the handle provided in the system. Do NOT start with a greeting like "hey" or "hi"; jump directly into the response.';
+    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response that:\n1. First replies to what he just said (respond naturally to his latest message)\n2. Then transitions with the exact CTA phrase provided in the system instructions\nDo NOT start with a greeting like "hey" or "hi"; respond directly to his message, then add the transition.';
   } else {
     userPrompt = 'This is the last chatting history. Based on this, please make a natural short response. Do NOT start with a greeting like "hey" or "hi"; respond directly to what he just said.';
   }
@@ -314,19 +324,28 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
     // If we share CTA info (IG/Snap/handle), ALWAYS apply invisible mode.
     // This also covers the N-th message CTA timing because shouldGenerateCTA
     // will be true at that moment.
-    const isCTA = shouldGenerateCTA || replyContainsCTAInfo(reply);
+    const detectedByContent = replyContainsCTAInfo(reply);
+    const isCTA = shouldGenerateCTA || detectedByContent;
+    
+    console.log(`[Backend] CTA detection: shouldGenerateCTA=${shouldGenerateCTA}, detectedByContent=${detectedByContent}, isCTA=${isCTA}, reply preview="${reply.substring(0, 100)}..."`);
 
-    // If this is a CTA, add invisible Unicode characters between characters in the entire message.
-    // This makes the CTA appear corrupted/invisible (invisible mode).
+    // CRITICAL: If CTA was requested (shouldGenerateCTA=true), ALWAYS apply invisible mode
+    // regardless of content detection. This ensures the N-th message CTA always gets obfuscated.
     if (isCTA) {
+      const originalLength = reply.length;
+      console.log(`[Backend] ✅ Applying invisible characters to CTA message (original length=${originalLength})`);
+      
       // Invisible Unicode characters: zero-width space, zero-width non-joiner, zero-width joiner, left-to-right mark, right-to-left mark
-      const invisibleChars = '\u200B\u200C\u200D\u200E\u200F';
+      const defaultInvisibleChars = '\u200B\u200C\u200D\u200E\u200F';
+      const customChars =
+        typeof ctaInvisibleChars === 'string' ? ctaInvisibleChars.trim() : '';
+      const invisibleChars = customChars || defaultInvisibleChars;
       
       // Apply invisible characters to the entire CTA message (not just last line)
       // Split into characters and add a RANDOM number (1–3) of invisible chars between each pair
-      reply = reply.split('').map((char, index) => {
+      reply = reply.split('').map((char, index, arr) => {
         // Don't add invisible char after the last character
-        if (index === reply.length - 1) {
+        if (index === arr.length - 1) {
           return char;
         }
         // Add between 1 and 3 random invisible chars between each character
@@ -340,6 +359,22 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
         }
         return buffer;
       }).join('');
+      
+      const newLength = reply.length;
+      console.log(`[Backend] ✅ Invisible chars applied: original=${originalLength}, new=${newLength}, added=${newLength - originalLength} invisible chars`);
+      
+      // Verify invisible chars were actually added
+      // Count default invisibles OR the custom set (best-effort)
+      const invisibleCharCount = customChars
+        ? reply.split('').filter((ch) => invisibleChars.includes(ch)).length
+        : (reply.match(/[\u200B\u200C\u200D\u200E\u200F]/g) || []).length;
+      if (invisibleCharCount === 0) {
+        console.error(`[Backend] ⚠️ WARNING: No invisible characters detected in reply after application!`);
+      } else {
+        console.log(`[Backend] ✅ Verified: ${invisibleCharCount} invisible characters found in final reply`);
+      }
+    } else {
+      console.log(`[Backend] ⏭️ Skipping invisible chars (not a CTA message)`);
     }
 
     return {
@@ -381,7 +416,9 @@ app.post('/generate-reply', async (req, res) => {
       partnerName,
       instagramHandle,
       snapchatHandle,
-      ctaType
+      ctaType,
+      ctaEnabled,
+      ctaInvisibleChars
     } = req.body;
 
     // Validation
@@ -405,7 +442,7 @@ app.post('/generate-reply', async (req, res) => {
       messages, 
       turnCount, 
       requestCTA || false,
-      { instagramHandle, snapchatHandle, ctaType, partnerName }
+      { instagramHandle, snapchatHandle, ctaType, partnerName, ctaEnabled, ctaInvisibleChars }
     );
 
     res.json(result);
@@ -435,9 +472,13 @@ const DEFAULT_SETTINGS = {
   instagramHandle: '',
   snapchatHandle: '',
   ctaType: 'instagram',
+  // CTA enable/disable
+  ctaEnabled: true,
   // CTA timing: request CTA after you have sent this many messages in that chat
   // 0 means "allow anytime"
   ctaAfterMessages: 3,
+  // Custom invisible characters for CTA obfuscation (blank = default)
+  ctaInvisibleChars: '',
   // OpenAI API key (stored in DB; used in preference to env)
   openaiApiKey: '',
   // Swipe settings
@@ -479,7 +520,9 @@ const normalizeSettings = (src = {}) => {
     instagramHandle: src.instagramHandle ?? DEFAULT_SETTINGS.instagramHandle,
     snapchatHandle: src.snapchatHandle ?? DEFAULT_SETTINGS.snapchatHandle,
     ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType,
+    ctaEnabled: src.ctaEnabled ?? DEFAULT_SETTINGS.ctaEnabled,
     ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
+    ctaInvisibleChars: (typeof src.ctaInvisibleChars === 'string' ? src.ctaInvisibleChars : DEFAULT_SETTINGS.ctaInvisibleChars),
     // Accept both camelCase and snake_case field names from clients/DB.
     openaiApiKey: openaiApiKeyCandidate ?? DEFAULT_SETTINGS.openaiApiKey,
     swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,

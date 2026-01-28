@@ -355,6 +355,17 @@
       <span>📱</span> CTA Settings
     </div>
 
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Enable CTA</div>
+        <div class="toggle-sublabel">Allow the bot to send Instagram/Snapchat CTA messages</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="ctaEnabled">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
     <div class="input-group">
       <div class="input-label">
         <span>⏱️</span> Send CTA after
@@ -365,6 +376,16 @@
       </div>
       <div class="toggle-sublabel" style="margin-top: 4px;">
         CTA can appear after you have sent this many messages in that chat. Set 0 to allow anytime.
+      </div>
+    </div>
+
+    <div class="input-group">
+      <div class="input-label">
+        <span>🫥</span> Invisible characters (custom)
+      </div>
+      <input type="text" class="input-field" id="ctaInvisibleChars" placeholder="Default: \u200B\u200C\u200D\u200E\u200F">
+      <div class="toggle-sublabel" style="margin-top: 4px;">
+        These characters will be randomly inserted between letters of CTA messages. Leave blank to use default zero-width chars.
       </div>
     </div>
     

@@ -65,7 +65,7 @@
   let yourTurnChatSequence = []; // Remembered sequence of "Your turn" chat IDs (preserves order before list reordering)
   let currentSequenceIndex = 0; // Current position in the sequence
   const repliedToIncomingMessages = {}; // { [conversationId]: Set of incoming message hashes we've replied to }
-  const conversationsWhereTheySharedCTA = new Set(); // Don't reply anymore once they shared their IG/Snap/phone
+  const conversationsWhereTheySharedCTA = new Set(); // Don't reply anymore once IG/Snap CTA exists in history
   const partnerNamesByConversation = {}; // { [conversationId]: "Sam" } - extracted from GraphQL response
   let gqlConversationCache = {}; // { [conversationId]: [{ text, isOutgoing }] } - messages from GraphQL
   const yourTurnMatchesFromGraphQL = new Set(); // userIds from MutualInboxMatches where isYourTurn === true
@@ -90,6 +90,10 @@
     // CTA timing: request CTA after you have sent this many messages in that chat
     // 0 means "allow anytime"
     ctaAfterMessages: 3,
+    // CTA enable/disable
+    ctaEnabled: true,
+    // Custom invisible characters for CTA obfuscation (blank = default)
+    ctaInvisibleChars: '',
     // Swipe settings
     swipeEnabled: false,
     swipeLikePercent: 50,
@@ -412,29 +416,17 @@
    * Detect if ANY CTA info exists anywhere in the full chat history (either side).
    * If true, we should not reply anymore to this conversation.
    *
-   * CTA info includes: Instagram/IG, Snapchat/Snap, @handles, phone-like numbers,
-   * or clear "add me / dm me" invitations.
+   * IMPORTANT: CTA info ONLY includes Instagram/IG or Snapchat/Snap.
+   * Phone numbers and other keywords are NOT considered CTA.
    */
   function chatHistoryContainsAnyCTA(messages) {
     if (!messages || !messages.length) return false;
     const allText = messages.map(m => (m.text || '')).join(' ').trim();
     if (!allText) return false;
 
-    // Basic signals
-    const hasAtHandle = /@[\w.]{2,}/.test(allText);
+    // Basic signals (Instagram/Snapchat only)
     const hasInstagram = /\b(instagram|ig)\b/i.test(allText);
     const hasSnapchat = /\b(snapchat|snap)\b/i.test(allText);
-
-    // Phone-like: allow spaces/dashes/parentheses; require ~10+ digits total
-    const hasPhoneLike =
-      /(\+?\d[\d\s().-]{7,}\d)/.test(allText) &&
-      ((allText.match(/\d/g) || []).length >= 10);
-
-    // Clear invitation intent
-    const hasInviteIntent =
-      /\b(add|dm|message|msg|text|call)\s+me\b/i.test(allText) ||
-      /\b(hit\s+me\s+up)\b/i.test(allText) ||
-      /\b(let'?s|lets)\s+(chat|talk)\b/i.test(allText);
 
     // Strong patterns that indicate sharing CTA info (either side)
     const strongPatterns = [
@@ -446,9 +438,7 @@
     ];
 
     if (strongPatterns.some(re => re.test(allText))) return true;
-    if (hasAtHandle && (hasInstagram || hasSnapchat || hasInviteIntent)) return true;
     if (hasInstagram || hasSnapchat) return true;
-    if (hasPhoneLike) return true;
 
     return false;
   }
@@ -1423,12 +1413,23 @@
    */
   async function generateAIReply(messages, turnCount, ctaSent) {
     try {
+      const ctaEnabled = settings.ctaEnabled !== false;
       // CTA timing is controlled by settings.ctaAfterMessages:
-      // request CTA once we have sent N messages in this chat (turnCount tracks our sent messages)
+      // turnCount is how many messages we have ALREADY sent.
+      // We want to trigger CTA on the N‑th message the user configured,
+      // so we base the check on the *next* message number (turnCount + 1).
       const ctaAfter = Number.isFinite(settings.ctaAfterMessages) ? settings.ctaAfterMessages : 3;
-      const shouldRequestCTA =
-        !ctaSent &&
-        turnCount >= Math.max(0, ctaAfter);
+      const nextTurnCount = turnCount + 1;
+      let shouldRequestCTA = false;
+      if (ctaEnabled && !ctaSent) {
+        if (ctaAfter <= 0) {
+          // 0 means "allow anytime": first eligible reply can be CTA.
+          shouldRequestCTA = true;
+        } else {
+          shouldRequestCTA = nextTurnCount >= ctaAfter;
+        }
+      }
+      console.log(`[AI Assistant] CTA check: turnCount=${turnCount}, nextTurnCount=${nextTurnCount}, ctaAfter=${ctaAfter}, ctaSent=${ctaSent}, shouldRequestCTA=${shouldRequestCTA}`);
 
       const partnerName = getPartnerDisplayName();
       // Send FULL chat history (not limited) with explicit direction labels
@@ -1440,13 +1441,18 @@
           isOutgoing: m.isOutgoing,
           direction: m.isOutgoing ? 'sent' : 'received' // Explicit label for AI context
         })),
-        turnCount: turnCount,
+        // Send the turn count that includes the reply we are about to send,
+        // so the backend knows how many messages we've sent in total.
+        turnCount: nextTurnCount,
         requestCTA: shouldRequestCTA,
         partnerName: partnerName || undefined,
         // Include social handles for CTA customization
         instagramHandle: settings.instagramHandle,
         snapchatHandle: settings.snapchatHandle,
-        ctaType: settings.ctaType
+        ctaType: settings.ctaType,
+        // CTA controls
+        ctaEnabled: ctaEnabled,
+        ctaInvisibleChars: (settings.ctaInvisibleChars || '')
       };
       
       console.log(`[AI Assistant] 📤 Sending ${messages.length} messages to backend (full history)`);
@@ -1469,6 +1475,15 @@
       
       if (data.isCTA) {
         await markCTASent(currentConversationId);
+        // Verify invisible characters are present in CTA replies
+        const customChars = (settings.ctaInvisibleChars || '').trim();
+        const invisibleCharCount = customChars
+          ? data.reply.split('').filter((ch) => customChars.includes(ch)).length
+          : (data.reply.match(/[\u200B\u200C\u200D\u200E\u200F]/g) || []).length;
+        console.log(`[AI Assistant] ✅ CTA reply received: length=${data.reply.length}, invisible chars=${invisibleCharCount}, preview="${data.reply.substring(0, 50)}..."`);
+        if (invisibleCharCount === 0) {
+          console.error(`[AI Assistant] ⚠️ WARNING: CTA reply has NO invisible characters!`);
+        }
       }
 
       return data.reply;
@@ -1881,7 +1896,7 @@
       if (conversationsWhereTheySharedCTA.has(currentConvId) || (messages.length > 0 && chatHistoryContainsAnyCTA(messages))) {
         conversationsWhereTheySharedCTA.add(currentConvId);
         console.log(`[AI Assistant] 🚫 CTA detected in chat history – not replying. Switching to next chat.`);
-        logSkipReason('CTA info exists in chat history (IG/Snap/phone/handle) — skipping replies for this conversation');
+        logSkipReason('CTA info exists in chat history (Instagram/Snapchat) — skipping replies for this conversation');
         const nextChatId = findNextYourTurnConversationId(currentConvId, true);
         if (nextChatId) {
           autoSwitchToNextChat(currentConvId);

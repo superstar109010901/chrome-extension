@@ -40,6 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const snapchatHandleEl = document.getElementById('snapchatHandle');
   const ctaTypeEl = document.getElementById('ctaType');
   const ctaAfterMessagesEl = document.getElementById('ctaAfterMessages');
+  const ctaEnabledEl = document.getElementById('ctaEnabled');
+  const ctaInvisibleCharsEl = document.getElementById('ctaInvisibleChars');
   const openaiApiKeyEl = document.getElementById('openaiApiKey');
   const removeOpenaiApiKeyEl = document.getElementById('removeOpenaiApiKey');
   const saveBtnEl = document.getElementById('saveBtn');
@@ -74,6 +76,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ctaType: 'instagram',
     // CTA timing
     ctaAfterMessages: 3,
+    // CTA enable/disable
+    ctaEnabled: true,
+    // Custom invisible characters for CTA obfuscation (blank = default)
+    ctaInvisibleChars: '',
     // OpenAI API key (stored in DB)
     openaiApiKey: '',
     // Swipe settings
@@ -121,6 +127,8 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandleEl.value = DEFAULT_SETTINGS.snapchatHandle;
       ctaTypeEl.value = DEFAULT_SETTINGS.ctaType;
       ctaAfterMessagesEl.value = DEFAULT_SETTINGS.ctaAfterMessages ?? 3;
+      if (ctaEnabledEl) ctaEnabledEl.checked = DEFAULT_SETTINGS.ctaEnabled ?? true;
+      if (ctaInvisibleCharsEl) ctaInvisibleCharsEl.value = DEFAULT_SETTINGS.ctaInvisibleChars ?? '';
       // OpenAI key is stored in a separate collection; do not load actual key into UI.
       openaiApiKeyEl.value = '';
       if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
@@ -166,6 +174,8 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandleEl.value = settings.snapchatHandle;
       ctaTypeEl.value = settings.ctaType;
       ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
+      if (ctaEnabledEl) ctaEnabledEl.checked = settings.ctaEnabled ?? true;
+      if (ctaInvisibleCharsEl) ctaInvisibleCharsEl.value = settings.ctaInvisibleChars ?? '';
       openaiApiKeyEl.value = '';
       if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
       try {
@@ -205,6 +215,8 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandle: snapchatHandleEl.value.trim(),
       ctaType: ctaTypeEl.value,
       ctaAfterMessages: parseInt(ctaAfterMessagesEl.value, 10),
+      ctaEnabled: ctaEnabledEl ? !!ctaEnabledEl.checked : true,
+      ctaInvisibleChars: ctaInvisibleCharsEl ? String(ctaInvisibleCharsEl.value || '') : '',
       swipeEnabled: swipeEnabledEl.checked,
       swipeLikePercent: parseInt(swipeLikePercentEl.value, 10),
       swipeIntervalSecondsMin: parseInt(swipeIntervalSecondsMinEl.value, 10),
@@ -220,6 +232,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!Number.isFinite(settings.ctaAfterMessages) || settings.ctaAfterMessages < 0) settings.ctaAfterMessages = 0;
     if (settings.ctaAfterMessages > 50) settings.ctaAfterMessages = 50;
+    // Normalize CTA invisible characters
+    if (typeof settings.ctaInvisibleChars !== 'string') settings.ctaInvisibleChars = '';
+    settings.ctaInvisibleChars = settings.ctaInvisibleChars.trim();
 
     // Validate swipe values
     if (!Number.isFinite(settings.swipeLikePercent)) settings.swipeLikePercent = 50;
@@ -422,6 +437,8 @@ document.addEventListener('DOMContentLoaded', () => {
   instagramHandleEl.addEventListener('change', () => {});
   snapchatHandleEl.addEventListener('change', () => {});
   ctaTypeEl.addEventListener('change', () => {});
+  if (ctaEnabledEl) ctaEnabledEl.addEventListener('change', () => {});
+  if (ctaInvisibleCharsEl) ctaInvisibleCharsEl.addEventListener('change', () => {});
 
   tabs.forEach((btn) => {
     btn.addEventListener('click', () => {
