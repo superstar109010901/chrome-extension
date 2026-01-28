@@ -118,6 +118,41 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   // requestCTA here.
   const shouldGenerateCTA = !!requestCTA;
 
+  // Detect CTA content in a generated reply (so we can always apply invisible mode
+  // whenever we share Instagram/Snapchat/handle info).
+  function replyContainsCTAInfo(text) {
+    const raw = (text || '').trim();
+    if (!raw) return false;
+    const lower = raw.toLowerCase();
+
+    const instaRaw = (instagramHandle || '').trim();
+    const instaNoAt = instaRaw.startsWith('@') ? instaRaw.slice(1) : instaRaw;
+    const snapRaw = (snapchatHandle || '').trim();
+
+    // Direct handle match
+    const handleCandidates = [instaRaw, instaNoAt, snapRaw]
+      .filter(Boolean)
+      .map((h) => h.toLowerCase());
+    if (handleCandidates.some((h) => lower.includes(h))) return true;
+
+    // Explicit platform mention (word-boundary safe: "ig" shouldn't match "right")
+    const mentionsInstagram = /\b(instagram|ig)\b/i.test(raw);
+    const mentionsSnapchat = /\b(snapchat|snap)\b/i.test(raw);
+
+    // Contains something that looks like an @handle (Instagram-style)
+    const hasAtHandle = /@[\w.]{2,}/.test(raw);
+
+    // "add me / dm me / message me" style CTA intent
+    const hasInviteIntent = /\b(add|dm|message|msg|hit)\s+me\b/i.test(raw) || /\b(let'?s|lets)\s+chat\b/i.test(raw);
+
+    // If they mention IG/Snap or show an @handle, treat as CTA content
+    if (hasAtHandle) return true;
+    if (mentionsInstagram || mentionsSnapchat) return true;
+    if (hasInviteIntent && (mentionsInstagram || mentionsSnapchat)) return true;
+
+    return false;
+  }
+
   // Build system prompt (concise, safe, and focused on Match.com chat)
   let systemPrompt = `
 You are helping write short, natural replies for a woman chatting with a man on the dating app Match.com.
@@ -268,11 +303,10 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       }
     }
     
-    // Mark as CTA strictly when we intentionally requested one.
-    // The content script decides WHEN to ask for a CTA based on the
-    // user's "CTA after N messages" setting, so only those replies
-    // should be obfuscated with invisible characters.
-    const isCTA = shouldGenerateCTA;
+    // If we share CTA info (IG/Snap/handle), ALWAYS apply invisible mode.
+    // This also covers the N-th message CTA timing because shouldGenerateCTA
+    // will be true at that moment.
+    const isCTA = shouldGenerateCTA || replyContainsCTAInfo(reply);
 
     // If this is a CTA, add invisible Unicode characters between characters in the entire message.
     // This makes the CTA appear corrupted/invisible (invisible mode).
