@@ -10,7 +10,7 @@
  */
 
 // Backend API URL (same one used by content script)
-const BACKEND_URL = 'https://match-ai-backend.onrender.com';
+const BACKEND_URL = 'https://chrome-extension-bjw9.onrender.com';
 
 document.addEventListener('DOMContentLoaded', () => {
   // Elements
@@ -253,15 +253,20 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       // Update OpenAI key first (if needed)
       if (removeKey) {
-        await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
+        const r = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
           method: 'DELETE'
         });
+        if (!r.ok) throw new Error(`Failed to delete OpenAI key (HTTP ${r.status})`);
       } else if (typedKey) {
-        await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
+        const r = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ apiKey: typedKey })
         });
+        if (!r.ok) {
+          const t = await r.text().catch(() => '');
+          throw new Error(`Failed to save OpenAI key (HTTP ${r.status}) ${t}`);
+        }
       }
 
       const response = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/settings`, {

@@ -164,7 +164,7 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
 You are helping write short, natural replies for a woman chatting with a man on the dating app Match.com.
 
 Overall style:
-- Keep replies very short (ideally under 5–10 words).
+- Keep replies short (ideally under 5–10 words).
 - Sound friendly, feminine, relaxed, and confident.
 - Use casual texting language (e.g. "hey", "haha", "lol") but do NOT overdo slang.
 - Match the other person's energy and topic; stay on the same subject.
@@ -177,6 +177,8 @@ Conversation rules:
 - Do not be clingy or desperate; keep a light, playful tone.
 - AVOID repetition: do NOT reuse the same opening line or sentence you already used earlier in this conversation.
 - Vary greetings and wording across different replies in the same chat.
+- IMPORTANT: After the first message in a conversation, do NOT open replies with generic greetings like "hey", "hi", "hello", or "hey [name]". Only greet once at the very start; afterwards, respond naturally to what he said.
+- Use his name only occasionally (for emphasis), not in every message.
 - Do NOT invent facts about yourself that conflict with the prior messages.
 
 CTA (moving off the app):
@@ -239,9 +241,9 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       : 'This is a new conversation. Please make a natural, short first greeting message.';
     systemPrompt += `\n\nThis is the FIRST message in a new conversation. Generate an opening greeting that is friendly, casual, and inviting.`;
   } else if (shouldGenerateCTA) {
-    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response that also naturally suggests moving this chat to the requested platform (Instagram or Snapchat) using the handle provided in the system.';
+    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response that also naturally suggests moving this chat to the requested platform (Instagram or Snapchat) using the handle provided in the system. Do NOT start with a greeting like "hey" or "hi"; jump directly into the response.';
   } else {
-    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response.';
+    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response. Do NOT start with a greeting like "hey" or "hi"; respond directly to what he just said.';
   }
 
   const baseMessagesForAPI = [
