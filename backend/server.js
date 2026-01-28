@@ -460,6 +460,10 @@ const normalizeSettings = (src = {}) => {
     swipeIntervalSecondsMax = swipeIntervalSecondsMax ?? Math.min(60, base + 2);
   }
 
+  const openaiApiKeyCandidate =
+    (typeof src.openaiApiKey === 'string' ? src.openaiApiKey : undefined) ??
+    (typeof src.open_ai_api_key === 'string' ? src.open_ai_api_key : undefined);
+
   return {
     autoMode: src.autoMode ?? DEFAULT_SETTINGS.autoMode,
     autoSend: src.autoSend ?? DEFAULT_SETTINGS.autoSend,
@@ -475,7 +479,8 @@ const normalizeSettings = (src = {}) => {
     snapchatHandle: src.snapchatHandle ?? DEFAULT_SETTINGS.snapchatHandle,
     ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType,
     ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
-    openaiApiKey: src.openaiApiKey ?? DEFAULT_SETTINGS.openaiApiKey,
+    // Accept both camelCase and snake_case field names from clients/DB.
+    openaiApiKey: openaiApiKeyCandidate ?? DEFAULT_SETTINGS.openaiApiKey,
     swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,
     swipeLikePercent: src.swipeLikePercent ?? DEFAULT_SETTINGS.swipeLikePercent,
     swipeIntervalSecondsMin: swipeIntervalSecondsMin ?? DEFAULT_SETTINGS.swipeIntervalSecondsMin,
@@ -525,6 +530,12 @@ app.post('/settings', async (req, res) => {
   try {
     const settingsCollection = await getSettingsCollection();
     const newSettings = req.body;
+    const incomingKey =
+      (typeof newSettings.openaiApiKey === 'string' ? newSettings.openaiApiKey : undefined) ??
+      (typeof newSettings.open_ai_api_key === 'string' ? newSettings.open_ai_api_key : undefined);
+    if (typeof incomingKey === 'string') {
+      console.log(`[Backend] Received openaiApiKey update (length=${incomingKey.trim().length})`);
+    }
 
     // Load existing settings (if any) so partial updates don't wipe fields
     const existingDoc = await settingsCollection.findOne({});
