@@ -12,7 +12,8 @@
     "storage",
     "activeTab",
     "tabs",
-    "alarms"
+    "alarms",
+    "debugger"
   ],
   "host_permissions": [
     "https://www.match.com/*",

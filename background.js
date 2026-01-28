@@ -5,7 +5,11 @@
  * - Storage management (if needed)
  * - API communication (optional, can be done from content script)
  * - Extension lifecycle events
+ * - Chrome Debugger API for GraphQL interception
  */
+
+// Track attached tabs for debugger
+const attachedTabs = new Set();
 
 // Listen for extension installation
 chrome.runtime.onInstalled.addListener((details) => {
@@ -13,6 +17,170 @@ chrome.runtime.onInstalled.addListener((details) => {
     console.log('Match.com AI Reply Assistant installed');
   } else if (details.reason === 'update') {
     console.log('Match.com AI Reply Assistant updated');
+  }
+  
+  // Attach debugger to any existing Match.com tabs
+  chrome.tabs.query({ url: '*://*.match.com/*' }, (tabs) => {
+    tabs.forEach(tab => {
+      if (tab.id) {
+        attachDebuggerToTab(tab.id);
+      }
+    });
+  });
+});
+
+// Attach debugger to existing Match.com tabs on startup
+chrome.tabs.query({ url: '*://*.match.com/*' }, (tabs) => {
+  tabs.forEach(tab => {
+    if (tab.id) {
+      attachDebuggerToTab(tab.id);
+    }
+  });
+});
+
+// Attach debugger to Match.com tabs
+async function attachDebuggerToTab(tabId) {
+  if (attachedTabs.has(tabId)) {
+    return; // Already attached
+  }
+
+  try {
+    await chrome.debugger.attach({ tabId }, '1.0');
+    await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
+    attachedTabs.add(tabId);
+    console.log(`[Background] 🔍 Debugger attached to tab ${tabId}`);
+  } catch (err) {
+    // Tab might already have debugger attached or be invalid
+    if (err.message && !err.message.includes('Another debugger')) {
+      console.warn(`[Background] Failed to attach debugger to tab ${tabId}:`, err);
+    }
+  }
+}
+
+// Detach debugger from tab
+async function detachDebuggerFromTab(tabId) {
+  if (!attachedTabs.has(tabId)) {
+    return;
+  }
+
+  try {
+    await chrome.debugger.detach({ tabId });
+    attachedTabs.delete(tabId);
+    console.log(`[Background] 🔍 Debugger detached from tab ${tabId}`);
+  } catch (err) {
+    console.warn(`[Background] Failed to detach debugger from tab ${tabId}:`, err);
+    attachedTabs.delete(tabId);
+  }
+}
+
+// Listen for tab updates to attach debugger to Match.com tabs
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading' && tab.url && tab.url.includes('match.com')) {
+    attachDebuggerToTab(tabId);
+  }
+});
+
+// Listen for tab removal to detach debugger
+chrome.tabs.onRemoved.addListener((tabId) => {
+  detachDebuggerFromTab(tabId);
+});
+
+// Store request bodies by requestId to match with responses
+const requestBodies = new Map();
+
+// Handle debugger events (GraphQL responses)
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  // Capture request body to get operationName and variables (userId)
+  if (method === 'Network.requestWillBeSent') {
+    const request = params.request;
+    const requestId = params.requestId;
+    
+    if (request.url && request.url.includes('/graphql') && request.postData) {
+      try {
+        const requestJson = JSON.parse(request.postData);
+        // Store request body by requestId for later matching
+        requestBodies.set(requestId, requestJson);
+      } catch (_) {
+        // Not JSON - ignore
+      }
+    }
+  }
+  
+  // Capture response body
+  if (method === 'Network.responseReceived') {
+    const response = params.response;
+    const requestId = params.requestId;
+    
+    // Check if it's a GraphQL request
+    if (response.url && response.url.includes('/graphql')) {
+      // Get the stored request body (if available)
+      const requestJson = requestBodies.get(requestId);
+      
+      // Small delay to ensure response body is available
+      setTimeout(() => {
+        // Get response body
+        chrome.debugger.sendCommand(
+          { tabId: source.tabId },
+          'Network.getResponseBody',
+          { requestId },
+          (responseBody) => {
+            // Clean up stored request
+            requestBodies.delete(requestId);
+            
+            if (chrome.runtime.lastError) {
+              // Response might not be available yet or already consumed
+              return;
+            }
+
+            try {
+              // Handle base64 encoded responses (shouldn't happen for JSON, but just in case)
+              let bodyText = responseBody.body;
+              if (responseBody.base64Encoded) {
+                // Decode base64 (for binary responses, but GraphQL should be text)
+                bodyText = atob(bodyText);
+              }
+              
+              const json = JSON.parse(bodyText);
+              
+              // Check if this is MutualInboxConversationHistory
+              // Check both request operationName and response structure
+              const isMutualInbox = requestJson?.operationName === 'MutualInboxConversationHistory' ||
+                                   bodyText.toLowerCase().includes('mutualinboxconversationhistory');
+              
+              if (isMutualInbox) {
+                const historyPayload = json?.data?.mutualInboxConversationHistory ?? json?.data?.MutualInboxConversationHistory;
+                if (historyPayload?.matchesHistory) {
+                  console.log(`[Background] 📥 Intercepted MutualInboxConversationHistory GraphQL response for tab ${source.tabId}`);
+                  // Send to content script with both request and response data
+                  chrome.tabs.sendMessage(source.tabId, {
+                    action: 'graphqlResponse',
+                    operation: 'MutualInboxConversationHistory',
+                    data: json,
+                    requestJson: requestJson,
+                    url: response.url
+                  }).catch((err) => {
+                    // Content script might not be ready
+                    console.warn(`[Background] Failed to send GraphQL response to content script:`, err);
+                  });
+                }
+              }
+            } catch (err) {
+              // Not JSON or invalid - ignore
+            }
+          }
+        );
+      }, 100); // Small delay to ensure response body is ready
+    } else {
+      // Not GraphQL - clean up stored request
+      requestBodies.delete(requestId);
+    }
+  }
+});
+
+// Handle debugger detach (user might have detached manually)
+chrome.debugger.onDetach.addListener((source) => {
+  if (source.tabId) {
+    attachedTabs.delete(source.tabId);
   }
 });
 

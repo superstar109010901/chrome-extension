@@ -100,13 +100,19 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   // Check if this is an empty conversation (no messages yet)
   const isEmptyConversation = !messages || messages.length === 0;
 
-  // Build conversation context
-  const conversationHistory = messages.map(msg => {
+  // Build conversation context with explicit direction labels for AI understanding
+  // Format: "Received: [message]" or "Sent: [message]" so AI understands conversation flow
+  // Send FULL chat history so AI has complete context
+  const conversationHistory = messages.map((msg, index) => {
+    const direction = msg.direction || (msg.isOutgoing ? 'sent' : 'received');
+    const label = direction === 'sent' ? 'Sent' : 'Received';
     return {
       role: msg.isOutgoing ? 'assistant' : 'user',
-      content: msg.text
+      content: `${label}: ${msg.text}`
     };
   });
+  
+  console.log(`[Backend] Processing ${messages.length} messages (FULL HISTORY) with direction labels (Received/Sent)`);
 
   // Determine if we should generate a CTA
   const shouldGenerateCTA = requestCTA && 
@@ -126,7 +132,12 @@ Rules:
 - Reply MUST directly address the other person's most recent message/topic
 - Do NOT introduce unrelated topics or random activities
 - When you are replying to a message, you have to reply as a woman.
-- Do NOT mention Instagram/Snapchat unless explicitly asked OR a CTA is requested`;
+- Do NOT mention Instagram/Snapchat unless explicitly asked OR a CTA is requested
+
+IMPORTANT - Conversation Context:
+- Messages labeled "Received:" are messages FROM the other person TO you
+- Messages labeled "Sent:" are messages FROM you TO the other person
+- Use the FULL conversation history to understand context and generate natural, contextually appropriate replies`;
   if (partnerName && typeof partnerName === 'string' && partnerName.trim()) {
     const name = partnerName.trim();
     systemPrompt += `\n\nCRITICAL - Name: The other person's display name is "${name}". You MUST use this exact name when greeting or addressing them. Never use a different name (e.g. do not say Jason if their name is Frank).`;
@@ -232,9 +243,10 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
  * 
  * Request body:
  * {
- *   messages: [{ text: string, isOutgoing: boolean }],
+ *   messages: [{ text: string, isOutgoing: boolean, direction: 'sent' | 'received' }],
  *   turnCount: number,
  *   requestCTA: boolean,
+ *   partnerName: string (optional),
  *   instagramHandle: string (optional),
  *   snapchatHandle: string (optional),
  *   ctaType: 'instagram' | 'snapchat' | 'random' (optional)

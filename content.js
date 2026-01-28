@@ -265,13 +265,32 @@
    * Listen for settings changes from popup
    * When popup saves settings, it sends a message with the new settings
    */
+  // Listen for settings changes from popup
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'settingsUpdated') {
+      console.log('[AI Assistant] 📥 Received settings update from popup:', request.settings);
       // Update settings from the message
       settings = { ...settings, ...request.settings };
       updateAutoMode();
       sendResponse({ success: true });
+      return true; // Keep channel open for async response
     }
+    
+    // Listen for GraphQL responses from debugger API (background script)
+    if (request.action === 'graphqlResponse' && request.operation === 'MutualInboxConversationHistory') {
+      console.log('[AI Assistant] 📥 Received GraphQL response from debugger API');
+      try {
+        // Extract request info if available (we'll need to get userId from response)
+        const requestJson = request.requestJson || null;
+        processMutualInboxResponse(request.data, requestJson);
+      } catch (err) {
+        console.error('[AI Assistant] Error processing debugger GraphQL response:', err);
+      }
+      sendResponse({ success: true });
+      return true;
+    }
+    
+    return false;
   });
 
   // Listen for settings updates from popup (popup sends message after saving to API)
@@ -318,115 +337,25 @@
   }
 
   /**
-   * Get the partner's display name from GraphQL cache first, then fallback to DOM.
-   * Used so the AI uses the correct name instead of inventing one.
+   * Get the partner's display name from GraphQL cache only (MutualInboxConversationHistory.handle).
+   * No DOM extraction.
    */
   function getPartnerDisplayName() {
-    // Method 0: Check GraphQL cache first (most reliable)
     const convId = getConversationId();
     if (convId && partnerNamesByConversation[convId]) {
       const name = partnerNamesByConversation[convId];
       console.log(`[AI Assistant] 📛 Using partner name from GraphQL: "${name}"`);
       return name;
     }
-    
-    try {
-      // Method 1: Look for name in main conversation header (most reliable)
-      // The name is in an h1 element within main (e.g., <h1 class="css-1gx31cz">Raddoc</h1>)
-      // "Matches" is the page/platform name, NOT the partner name
-      // The partner name h1 is usually inside a button or div in the conversation header area
-      const main = document.querySelector('main, [role="main"]');
-      if (main) {
-        // Strategy: Find h1 elements, but prioritize those in the conversation header area
-        // The partner name h1 is typically inside a button or specific container structure
-        // Look for h1 inside button first (conversation header), then other containers
-        const h1InButton = main.querySelector('button h1, button[class*="css-"] h1');
-        if (h1InButton) {
-          const text = (h1InButton.textContent || '').trim();
-          if (text && text.length >= 2 && text.length <= 50 &&
-              text.toLowerCase() !== 'matches' &&
-              !/^(matches?|messages?|chat|conversation|match\.com|active|your\s+turn|home|profile|settings)/i.test(text)) {
-            console.log(`[AI Assistant] 📛 Found partner name in button h1: "${text}"`);
-            return text;
-          }
-        }
-        
-        // Priority 2: Check all h1 elements, but prioritize those in conversation header structure
-        // The partner name h1 is in the same DOM position for all chats (inside button with css-* classes)
-        const h1Elements = main.querySelectorAll('h1');
-        for (const h1 of h1Elements) {
-          const text = (h1.textContent || '').trim();
-          
-          // Skip "Matches" explicitly (it's the page name, not a partner name)
-          if (text.toLowerCase() === 'matches') {
-            continue;
-          }
-          
-          // Check if this h1 is in a button or has css-* class (indicates conversation header)
-          const parent = h1.parentElement;
-          const isInButton = parent && (parent.tagName === 'BUTTON' || parent.closest('button'));
-          const hasCssClass = h1.className && typeof h1.className === 'string' && h1.className.includes('css-');
-          const parentHasCssClass = parent && parent.className && typeof parent.className === 'string' && parent.className.includes('css-');
-          
-          // Partner name h1 is usually in button or has css-* classes (same position for all chats)
-          if (text && text.length >= 2 && text.length <= 50 &&
-              !/^(matches?|messages?|chat|conversation|match\.com|active|your\s+turn|home|profile|settings)/i.test(text)) {
-            // If it's in a button or has css classes, it's likely the partner name (like "Ethan Reich", "Raddoc", etc.)
-            if (isInButton || hasCssClass || parentHasCssClass) {
-              console.log(`[AI Assistant] 📛 Found partner name in h1: "${text}" (in button: ${isInButton}, has css: ${hasCssClass || parentHasCssClass})`);
-              return text;
-            }
-          }
-        }
-        
-        // Fallback: Try other name/title elements, but exclude "Matches"
-        const nameSelectors = 'h2, [class*="title" i], [class*="name" i], [class*="profile" i], [class*="header" i]';
-        const nameEls = main.querySelectorAll(nameSelectors);
-        for (const nameEl of nameEls) {
-          const t = (nameEl.textContent || '').trim();
-          // Extract first word/phrase (name before comma, age, etc.)
-          const namePart = t.split(/[\n,]/)[0].trim();
-          if (namePart && namePart.length >= 2 && namePart.length <= 50 &&
-              namePart.toLowerCase() !== 'matches' &&
-              !/^(matches?|messages?|chat|conversation|match\.com|active|your\s+turn|home|profile|settings)/i.test(namePart)) {
-            console.log(`[AI Assistant] 📛 Found partner name in header element: "${namePart}"`);
-            return namePart;
-          }
-        }
+    const keys = Object.keys(partnerNamesByConversation);
+    if (keys.length > 0) {
+      const latestKey = keys[keys.length - 1];
+      const name = partnerNamesByConversation[latestKey];
+      if (name) {
+        console.log(`[AI Assistant] 📛 Using partner name from GraphQL (by key ${latestKey}): "${name}"`);
+        return name;
       }
-      
-      // Method 2: Extract from conversation list item (sidebar)
-      const convId = getConversationId();
-      const items = getConversationItemsInOrder();
-      const cur = items.find(i => i.id === convId);
-      if (cur && cur.el) {
-        // Get text, remove "Your turn" badge text, extract first part
-        const raw = (cur.el.textContent || '').replace(/\byour\s+turn\b/gi, '').trim();
-        const namePart = raw.split(/[\n,]/)[0].trim();
-        // Filter out common non-name patterns, especially "Matches" (page name)
-        if (namePart && namePart.length >= 2 && namePart.length <= 40 &&
-            namePart.toLowerCase() !== 'matches' &&
-            !/^(matches?|messages?|chat|conversation|match|active)/i.test(namePart)) {
-          console.log(`[AI Assistant] 📛 Found partner name in sidebar: "${namePart}"`);
-          return namePart;
-        }
-      }
-      
-      // Method 3: Look for name in message bubbles (sender name)
-      const messageElements = document.querySelectorAll('[class*="message" i], [class*="bubble" i]');
-      for (const msgEl of Array.from(messageElements).slice(-5)) { // Check last 5 messages
-        const text = (msgEl.textContent || '').trim();
-        // Look for patterns like "Name:" or sender indicators
-        const nameMatch = text.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)[:,\s]/);
-        if (nameMatch && nameMatch[1] && nameMatch[1].length >= 2 && nameMatch[1].length <= 30) {
-          console.log(`[AI Assistant] 📛 Found partner name in message: "${nameMatch[1]}"`);
-          return nameMatch[1];
-        }
-      }
-    } catch (err) {
-      console.warn('[AI Assistant] ⚠️ Error extracting partner name:', err);
     }
-    console.log('[AI Assistant] ⚠️ Could not extract partner name from DOM');
     return null;
   }
 
@@ -837,339 +766,31 @@
   }
 
   /**
-   * Extract messages from GraphQL cache first, then fallback to DOM scraping
-   * More precise extraction to avoid picking up navigation/footer text
+   * Extract messages from GraphQL cache only (MutualInboxConversationHistory, type=Message).
+   * No DOM extraction.
    */
   function extractMessages() {
-    // Try GraphQL cache first (most reliable)
     const convId = getConversationId();
-    
-    // Check cache by conversation ID - return even if [] (confirmed no type=Message items, e.g. only Like)
+
     if (convId && convId in gqlConversationCache) {
       const gqlMessages = gqlConversationCache[convId];
       const arr = Array.isArray(gqlMessages) ? gqlMessages : [];
-      console.log(`[AI Assistant] 📋 Using ${arr.length} messages from GraphQL cache (by convId: ${convId})`);
-      return arr.length > 0 ? arr.slice(-CONFIG.MAX_MESSAGES_TO_SEND) : arr;
+      console.log(`[AI Assistant] 📋 Using ${arr.length} messages from GraphQL cache (by convId: ${convId}) - FULL HISTORY`);
+      return arr; // Return full history, not limited
     }
-    
-    // Also check if we can find messages by any userId key (in case URL-based ID doesn't match)
+
     const cachedKeys = Object.keys(gqlConversationCache);
     if (cachedKeys.length > 0) {
       const latestKey = cachedKeys[cachedKeys.length - 1];
       const gqlMessages = gqlConversationCache[latestKey];
       if (gqlMessages && Array.isArray(gqlMessages)) {
-        console.log(`[AI Assistant] 📋 Using ${gqlMessages.length} messages from GraphQL cache (by key: ${latestKey})`);
-        return gqlMessages.length > 0 ? gqlMessages.slice(-CONFIG.MAX_MESSAGES_TO_SEND) : gqlMessages;
-      }
-    }
-    
-    // Fallback to DOM extraction
-    const messages = [];
-    
-    // First, try to find the conversation/message container near the input
-    const input = findMessageInput();
-    let conversationContainer = null;
-
-    const messageSelectors = [
-      '[class*="message" i][class*="bubble" i]',
-      '[class*="message" i][class*="text" i]',
-      '[class*="message" i][class*="content" i]',
-      '[data-message-id]',
-      '[role="listitem"][class*="message" i]',
-      'div[class*="message" i]:not([class*="input" i]):not([class*="compose" i])',
-      'article[class*="message" i]',
-      'li[class*="message" i]'
-    ];
-
-    function looksLikeSidebar(el) {
-      const t = (el && el.textContent) ? el.textContent.toLowerCase() : '';
-      return t.includes('active conversations');
-    }
-
-    function findConversationRootFromInput(inp) {
-      if (!inp) return null;
-      // Prefer main content areas
-      const main = inp.closest('main, [role="main"]');
-      if (main && !looksLikeSidebar(main)) return main;
-
-      // Otherwise walk up and pick the smallest ancestor that contains multiple message-like elements
-      let p = inp.parentElement;
-      for (let depth = 0; depth < 14 && p; depth++) {
-        if (!looksLikeSidebar(p)) {
-          let count = 0;
-          for (const sel of messageSelectors) {
-            count += p.querySelectorAll(sel).length;
-            if (count >= 2) return p;
-          }
-        }
-        p = p.parentElement;
-      }
-      return null;
-    }
-    
-    if (input) {
-      // Walk up the DOM tree from input to find the conversation container
-      let parent = input.parentElement;
-      for (let i = 0; i < 10 && parent; i++) {
-        const classes = getClassNameLower(parent);
-        const id = (parent.id || '').toLowerCase();
-        if (classes.includes('conversation') || classes.includes('thread') || 
-            classes.includes('messages') || classes.includes('chat') ||
-            id.includes('conversation') || id.includes('thread') ||
-            id.includes('messages') || id.includes('chat')) {
-          conversationContainer = parent;
-          break;
-        }
-        parent = parent.parentElement;
-      }
-    }
-    
-    // If no container found, try common selectors
-    if (!conversationContainer) {
-      const candidates = [
-        '[class*="conversation" i]',
-        '[class*="thread" i]',
-        '[class*="messages" i]',
-        '[class*="chat" i]',
-        '[id*="conversation" i]',
-        '[id*="thread" i]',
-        '[id*="messages" i]',
-        '[id*="chat" i]'
-      ];
-      
-      for (const selector of candidates) {
-        const found = queryOne(selector);
-        if (found) {
-          conversationContainer = found;
-          break;
-        }
+        console.log(`[AI Assistant] 📋 Using ${gqlMessages.length} messages from GraphQL cache (by key: ${latestKey}) - FULL HISTORY`);
+        return gqlMessages; // Return full history, not limited
       }
     }
 
-    // Search scope: strictly constrain to the currently open conversation UI.
-    // Falling back to `document` is what caused "off-topic" replies (it can pull messages from other chats / sidebar).
-    let searchRoot = conversationContainer || findConversationRootFromInput(input);
-    let messageElements = [];
-    
-    // AGGRESSIVE FALLBACK: If strict root detection fails, use input's visual context
-    if (!searchRoot && input) {
-      const inputRect = input.getBoundingClientRect();
-      const viewportHeight = window.innerHeight;
-      
-      // Find the main content area (exclude sidebar which is typically on the left)
-      const mainContent = document.querySelector('main, [role="main"], [class*="main" i], [class*="content" i]');
-      const fallbackRoot = mainContent || document.body;
-      
-      console.log(`[AI Assistant] 🔍 Visual fallback: searching in ${fallbackRoot.tagName} for messages above input`);
-      
-      // Search for message-like elements visually positioned above the input
-      // Use a broader search to catch all potential message containers
-      const allCandidates = fallbackRoot.querySelectorAll('div, li, article, p, span, [role="listitem"]');
-      const visualCandidates = Array.from(allCandidates).filter(el => {
-        // Exclude sidebar explicitly
-        if (looksLikeSidebar(el) || looksLikeSidebar(el.parentElement)) return false;
-        if (el.closest('aside, nav, [role="navigation"], [class*="sidebar" i]')) return false;
-        
-        const rect = el.getBoundingClientRect();
-        const text = el.textContent?.trim();
-        
-        // Must be above the input and within reasonable bounds (more permissive)
-        if (rect.bottom > inputRect.top + 50) return false; // Allow some overlap
-        if (rect.top < -200 || rect.bottom > viewportHeight + 500) return false; // More permissive viewport check
-        
-        // Must have message-like text (more permissive)
-        if (!text || text.length < 3 || text.length > 2000) return false;
-        const words = text.split(/\s+/).filter(w => w.length > 0);
-        if (words.length < 1) return false; // Allow single words too
-        
-        // Exclude navigation/footer text
-        const textLower = text.toLowerCase();
-        const excludeWords = ['privacy', 'terms', 'cookie', 'success stories', 'help', 
-                             'about', 'contact', 'sign in', 'sign up', 'log in', 'log out',
-                             'settings', 'profile', 'matches', 'search', 'consumer heal',
-                             'active conversations', 'your turn', 'check out our safety'];
-        if (excludeWords.some(word => textLower.includes(word))) return false;
-        
-        // Exclude buttons, inputs, links
-        if (el.matches('a, button, input, select, nav, header, footer')) return false;
-        if (el.closest('nav, header, footer, [role="navigation"]')) return false;
-        
-        // Exclude if it's the input field itself or too close to it
-        if (el === input || el.contains(input)) return false;
-        
-        return true;
-      });
-      
-      // Sort by vertical position (top to bottom, closest to input first)
-      visualCandidates.sort((a, b) => {
-        const rectA = a.getBoundingClientRect();
-        const rectB = b.getBoundingClientRect();
-        return rectB.bottom - rectA.bottom; // Bottom-most first (closest to input)
-      });
-      
-      if (visualCandidates.length > 0) {
-        searchRoot = fallbackRoot;
-        messageElements = visualCandidates.slice(0, 30); // Increased limit
-        console.log(`[AI Assistant] ✅ Using visual fallback: found ${visualCandidates.length} candidate messages above input`);
-      } else {
-        console.log(`[AI Assistant] ⚠️ Visual fallback found 0 candidates`);
-      }
-    }
-    
-    // ULTIMATE FALLBACK: If we still have no root, use input's parent chain more aggressively
-    if (!searchRoot && input) {
-      console.log(`[AI Assistant] 🔍 Ultimate fallback: using input's parent chain`);
-      let parent = input.parentElement;
-      for (let depth = 0; depth < 20 && parent; depth++) {
-        if (parent === document.body || parent === document.documentElement) break;
-        if (!looksLikeSidebar(parent)) {
-          // Check if this parent has message-like children
-          const potentialMessages = parent.querySelectorAll('div, li, article, p');
-          const messageCount = Array.from(potentialMessages).filter(el => {
-            const text = el.textContent?.trim();
-            return text && text.length >= 3 && text.length <= 2000 && 
-                   !el.matches('a, button, input') &&
-                   !el.closest('nav, header, footer');
-          }).length;
-          
-          if (messageCount >= 2) {
-            searchRoot = parent;
-            console.log(`[AI Assistant] ✅ Found conversation root at depth ${depth} with ${messageCount} potential messages`);
-            break;
-          }
-        }
-        parent = parent.parentElement;
-      }
-    }
-    
-    if (!searchRoot) {
-      console.warn('[AI Assistant] ⚠️ Could not locate conversation root after all fallbacks');
-      // Last resort: try to extract from main content area anyway
-      const mainContent = document.querySelector('main, [role="main"]');
-      if (mainContent && input) {
-        const inputRect = input.getBoundingClientRect();
-        const candidates = mainContent.querySelectorAll('div, li, article, p');
-        const nearInput = Array.from(candidates).filter(el => {
-          const rect = el.getBoundingClientRect();
-          return rect.bottom < inputRect.top && rect.top > 0 && 
-                 el.textContent?.trim().length >= 3 &&
-                 !el.closest('aside, nav');
-        });
-        if (nearInput.length > 0) {
-          searchRoot = mainContent;
-          messageElements = nearInput.slice(0, 20);
-          console.log(`[AI Assistant] ⚠️ Using last-resort extraction: ${nearInput.length} messages`);
-        }
-      }
-      
-      if (!searchRoot) {
-        console.warn('[AI Assistant] ⚠️ All extraction methods failed - returning empty array');
-        return [];
-      }
-    }
-
-    // Try specific message selectors if we don't have visual fallback results
-    if (messageElements.length === 0) {
-      for (const selector of messageSelectors) {
-        const found = searchRoot.querySelectorAll(selector);
-        if (found.length > 0) {
-          messageElements = Array.from(found);
-          break;
-        }
-      }
-    }
-
-    // Fallback: look for elements with message-like structure
-    if (messageElements.length === 0 && conversationContainer) {
-      // Find all divs/li/article within conversation container
-      const candidates = conversationContainer.querySelectorAll('div, li, article, p');
-      messageElements = Array.from(candidates).filter(el => {
-        const text = el.textContent?.trim();
-        if (!text || text.length < 3 || text.length > 1000) return false;
-        
-        // Exclude navigation, buttons, inputs, links
-        if (el.matches('a, button, input, select, nav, header, footer')) return false;
-        if (el.closest('nav, header, footer, [role="navigation"]')) return false;
-        
-        // Exclude if contains common navigation words
-        const excludeWords = ['privacy', 'terms', 'cookie', 'success stories', 'help', 
-                             'about', 'contact', 'sign in', 'sign up', 'log in', 'log out',
-                             'settings', 'profile', 'matches', 'search', 'consumer heal'];
-        const textLower = text.toLowerCase();
-        if (excludeWords.some(word => textLower.includes(word))) return false;
-        
-        // Must have some actual message-like content (not just single words)
-        const words = text.split(/\s+/).filter(w => w.length > 0);
-        if (words.length < 2) return false;
-        
-        return true;
-      });
-    }
-
-    // Process and filter messages
-    messageElements.forEach((element, index) => {
-      const text = element.textContent?.trim() || '';
-      if (!text || text.length < 3) return;
-      
-      // Additional filtering: exclude if looks like navigation
-      const textLower = text.toLowerCase();
-      const excludePatterns = ['privacy', 'cookie', 'success stories', 'consumer heal', 
-                               'check out our safety', 'reminder:', 'avoid scammers',
-                               'terms of use', 'delivered', 'read', 'sent at'];
-      if (excludePatterns.some(pattern => textLower.includes(pattern))) {
-        return;
-      }
-      
-      // Exclude if it's just a timestamp or status
-      if (/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(text.trim()) || 
-          /^(delivered|read|sent)$/i.test(text.trim())) {
-        return;
-      }
-
-      const classes = getClassNameLower(element);
-      const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || '';
-      const parentClasses = getClassNameLower(element.parentElement);
-      const parentParentClasses = getClassNameLower(element.parentElement?.parentElement);
-      
-      // More precise detection of outgoing messages
-      const isOutgoing = 
-        classes.includes('sent') ||
-        classes.includes('outgoing') ||
-        classes.includes('me') ||
-        classes.includes('self') ||
-        classes.includes('own') ||
-        classes.includes('right') ||
-        classes.includes('from-me') ||
-        ariaLabel.includes('sent') ||
-        ariaLabel.includes('you') ||
-        ariaLabel.includes('from you') ||
-        parentClasses.includes('sent') ||
-        parentClasses.includes('outgoing') ||
-        parentClasses.includes('from-me') ||
-        parentParentClasses.includes('sent') ||
-        parentParentClasses.includes('outgoing') ||
-        (element.offsetLeft > (window.innerWidth / 2) && element.offsetLeft > 0);
-
-      messages.push({
-        text: text,
-        isOutgoing: isOutgoing,
-        timestamp: Date.now() - (messageElements.length - index) * 60000,
-        element: element
-      });
-    });
-
-    // Remove duplicates (same text, keep only one)
-    const seen = new Set();
-    const uniqueMessages = messages.filter(msg => {
-      const key = msg.text.substring(0, 100).toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    console.log(`[AI Assistant] Extracted ${uniqueMessages.length} messages from ${messageElements.length} elements`);
-    
-    return uniqueMessages.slice(-CONFIG.MAX_MESSAGES_TO_SEND);
+    console.log(`[AI Assistant] 📋 No GraphQL cache for conversation – returning []`);
+    return [];
   }
 
   /**
@@ -1283,10 +904,12 @@
         turnCount <= CONFIG.MAX_TURNS_FOR_CTA;
 
       const partnerName = getPartnerDisplayName();
+      // Send FULL chat history (not limited) with explicit direction labels
       const payload = {
         messages: messages.map(m => ({
           text: m.text,
-          isOutgoing: m.isOutgoing
+          isOutgoing: m.isOutgoing,
+          direction: m.isOutgoing ? 'sent' : 'received' // Explicit label for AI context
         })),
         turnCount: turnCount,
         requestCTA: shouldRequestCTA,
@@ -1296,6 +919,8 @@
         snapchatHandle: settings.snapchatHandle,
         ctaType: settings.ctaType
       };
+      
+      console.log(`[AI Assistant] 📤 Sending ${messages.length} messages to backend (full history)`);
 
       const data = await new Promise((resolve, reject) => {
         try {
@@ -1371,6 +996,7 @@
    */
   async function checkAndAutoReply() {
     const session = autoSessionId;
+    
     // Skip if not in auto mode or already processing
     if (!settings.autoMode || isProcessingAuto) {
       if (!settings.autoMode) {
@@ -1379,6 +1005,11 @@
         logSkipReason('already processing another auto-reply');
       }
       return;
+    }
+    
+    // Debug: Log that we're running (only occasionally to avoid spam)
+    if (Math.random() < 0.01) { // Log ~1% of the time
+      console.log('[AI Assistant] 🔄 checkAndAutoReply running...', { session, autoSessionId, autoModeActive });
     }
 
     // Always refresh message input (may not be set yet on empty "You're a match" view)
@@ -1969,6 +1600,8 @@
    * Start or stop auto mode based on settings
    */
   function updateAutoMode() {
+    console.log('[AI Assistant] updateAutoMode called:', { autoMode: settings.autoMode, isMessagesPage: isMessagesPage(), messageInput: !!messageInput });
+    
     // Bump session to cancel any in-flight auto work
     autoSessionId++;
     // Clear existing intervals
@@ -1998,6 +1631,7 @@
 
     // Start auto mode if enabled
     if (settings.autoMode && isMessagesPage()) {
+      console.log('[AI Assistant] ✅ Starting auto mode - conditions met');
       const wasAutoActive = autoModeActive; // Only "navigate to first" when turning ON, not when re-applying
       // Initialize message hash to current state (don't reply to existing messages)
       lastMessageHash = getMessagesHash();
@@ -2034,17 +1668,21 @@
       }
       
       // Start checking for new messages
-      autoModeInterval = setInterval(checkAndAutoReply, CONFIG.AUTO_CHECK_INTERVAL);
+      autoModeInterval = setInterval(() => {
+        try {
+          checkAndAutoReply();
+        } catch (err) {
+          console.error('[AI Assistant] ❌ Error in checkAndAutoReply:', err);
+        }
+      }, CONFIG.AUTO_CHECK_INTERVAL);
+      
+      console.log(`[AI Assistant] 🤖 Auto mode ACTIVATED - interval set to ${CONFIG.AUTO_CHECK_INTERVAL}ms`);
       
       // If break mode is enabled, schedule breaks
       if (settings.randomBreakMode && !isOnBreak) {
         scheduleNextBreak();
         // Also run break check periodically
         breakCheckInterval = setInterval(checkBreakStatus, 30000); // Check every 30 seconds
-      }
-      
-      console.log('[AI Assistant] 🤖 Auto mode ACTIVATED');
-      if (settings.randomBreakMode) {
         console.log('[AI Assistant] ☕ Break mode enabled');
       }
     } else {
@@ -2053,7 +1691,11 @@
       allowInitialAutoReply = false;
       nextAutoSwitchAt = 0;
       isProcessingAuto = false;
-      console.log('[AI Assistant] Auto mode deactivated');
+      if (!settings.autoMode) {
+        console.log('[AI Assistant] Auto mode deactivated - settings.autoMode is false');
+      } else if (!isMessagesPage()) {
+        console.log('[AI Assistant] Auto mode deactivated - not on messages page');
+      }
     }
   }
 
@@ -2247,6 +1889,83 @@
   /**
    * Hook into fetch to intercept GraphQL responses and extract conversation data
    */
+  /**
+   * Process MutualInboxConversationHistory GraphQL response
+   * Extracts partner name (handle) and messages (type=Message only)
+   */
+  function processMutualInboxResponse(json, requestJson) {
+    try {
+      // Support both camelCase and PascalCase response keys
+      const historyPayload = json?.data?.mutualInboxConversationHistory ?? json?.data?.MutualInboxConversationHistory;
+      const history = historyPayload?.matchesHistory;
+      
+      if (!history) {
+        console.warn('[AI Assistant] ⚠️ No matchesHistory in GraphQL response');
+        return;
+      }
+      
+      // Try to get conversation ID from current URL first
+      let convId = getConversationId();
+      
+      // Extract userId from request variables
+      const requestUserId = requestJson?.variables?.userId;
+      
+      // Use userId from response (matchesHistory.userId) or request as fallback
+      const historyUserId = history.userId;
+      if (!convId && requestUserId) convId = requestUserId;
+      if (!convId && historyUserId) convId = historyUserId;
+      
+      const cacheKey = convId || requestUserId || historyUserId;
+      
+      console.log(`[AI Assistant] 📥 Received MutualInboxConversationHistory response for userId: ${historyUserId || requestUserId || 'unknown'}, cacheKey: ${cacheKey}`);
+      
+      // Extract partner name (handle) - store by all known IDs for lookup
+      if (history.handle) {
+        for (const id of [convId, requestUserId, historyUserId].filter(Boolean)) {
+          partnerNamesByConversation[id] = history.handle;
+        }
+        if (cacheKey) {
+          console.log(`[AI Assistant] 📛 Extracted partner name from GraphQL: "${history.handle}" for conversation ${cacheKey}`);
+        }
+      } else {
+        console.warn('[AI Assistant] ⚠️ No handle (partner name) in GraphQL response');
+      }
+      
+      // Extract messages from GraphQL: only type=Message counts; type=Like has message=null
+      if (history.items && Array.isArray(history.items)) {
+        const totalItems = history.items.length;
+        const messages = history.items
+          .filter(item => item.type === 'Message' && item.message && (item.message + '').trim())
+          .map(item => ({
+            text: item.message,
+            isOutgoing: item.direction === 'Sent',
+            timestamp: new Date(item.sentDate).getTime()
+          }));
+        
+        console.log(`[AI Assistant] 📋 GraphQL response: ${totalItems} total items, ${messages.length} type=Message items`);
+        
+        // Always store cache for this conversation: [] = confirmed no messages (e.g. only "Like" items)
+        if (cacheKey) {
+          gqlConversationCache[cacheKey] = messages;
+          if (messages.length > 0) {
+            console.log(`[AI Assistant] 📋 Cached ${messages.length} messages from GraphQL for conversation ${cacheKey}`);
+          } else {
+            console.log(`[AI Assistant] 📋 Cached 0 messages (empty/conversation or only Like items) for ${cacheKey} - eligible for first greeting`);
+          }
+        } else {
+          console.warn('[AI Assistant] ⚠️ No cacheKey available - cannot store messages');
+        }
+      } else {
+        console.warn('[AI Assistant] ⚠️ No items array in GraphQL response');
+      }
+    } catch (err) {
+      console.error('[AI Assistant] ❌ Error processing MutualInboxConversationHistory response:', err);
+    }
+  }
+
+  /**
+   * Hook window.fetch to intercept GraphQL responses
+   */
   (function hookGraphQLFetch() {
     if (typeof window === 'undefined' || !window.fetch) return;
     
@@ -2265,74 +1984,125 @@
         
         // Check if this is MutualInboxConversationHistory request
         let requestBody = null;
+        let requestJson = null;
         if (init && init.body) {
           requestBody = typeof init.body === 'string' ? init.body : JSON.stringify(init.body);
+          try {
+            requestJson = JSON.parse(requestBody);
+          } catch (_) {}
         }
         
-        if (requestBody && requestBody.toLowerCase().includes('mutualinboxconversationhistory')) {
+        // Check both operationName field and string match for reliability
+        const isMutualInboxRequest = requestJson?.operationName === 'MutualInboxConversationHistory' ||
+                                     (requestBody && requestBody.toLowerCase().includes('mutualinboxconversationhistory'));
+        
+        if (isMutualInboxRequest) {
           const json = await clonedResponse.json().catch(() => null);
-          // Support both camelCase and PascalCase response keys
-          const historyPayload = json?.data?.mutualInboxConversationHistory ?? json?.data?.MutualInboxConversationHistory;
-          const history = historyPayload?.matchesHistory;
-          
-          if (history) {
-            // Try to get conversation ID from current URL first
-            let convId = getConversationId();
-            
-            // Also try to extract userId from request body to match conversations
-            let requestUserId = null;
-            try {
-              if (requestBody) {
-                const reqJson = JSON.parse(requestBody);
-                requestUserId = reqJson?.variables?.userId;
-              }
-            } catch (_) {}
-            
-            // Use userId from response (matchesHistory.userId) or request as fallback
-            const historyUserId = history.userId;
-            if (!convId && requestUserId) convId = requestUserId;
-            if (!convId && historyUserId) convId = historyUserId;
-            
-            const cacheKey = convId || requestUserId || historyUserId;
-            
-            // Extract partner name (handle) - store by all known IDs for lookup
-            if (history.handle) {
-              for (const id of [convId, requestUserId, historyUserId].filter(Boolean)) {
-                partnerNamesByConversation[id] = history.handle;
-              }
-              if (cacheKey) {
-                console.log(`[AI Assistant] 📛 Extracted partner name from GraphQL: "${history.handle}" for conversation ${cacheKey}`);
-              }
-            }
-            
-            // Extract messages from GraphQL: only type=Message counts; type=Like has message=null
-            if (history.items && Array.isArray(history.items)) {
-              const messages = history.items
-                .filter(item => item.type === 'Message' && item.message && (item.message + '').trim())
-                .map(item => ({
-                  text: item.message,
-                  isOutgoing: item.direction === 'Sent',
-                  timestamp: new Date(item.sentDate).getTime()
-                }));
-              
-              // Always store cache for this conversation: [] = confirmed no messages (e.g. only "Like" items)
-              if (cacheKey) {
-                gqlConversationCache[cacheKey] = messages;
-                if (messages.length > 0) {
-                  console.log(`[AI Assistant] 📋 Cached ${messages.length} messages from GraphQL for conversation ${cacheKey}`);
-                } else {
-                  console.log(`[AI Assistant] 📋 Cached 0 messages (empty/conversation or only Like items) for ${cacheKey} - eligible for first greeting`);
-                }
-              }
-            }
+          if (json) {
+            processMutualInboxResponse(json, requestJson);
           }
         }
       } catch (err) {
         // Silently ignore errors - don't break the page
-        console.warn('[AI Assistant] Error intercepting GraphQL response:', err);
+        console.warn('[AI Assistant] Error intercepting GraphQL fetch response:', err);
       }
       
       return response;
+    };
+  })();
+
+  /**
+   * Hook XMLHttpRequest to intercept GraphQL responses (fallback for requests not using fetch)
+   */
+  (function hookGraphQLXHR() {
+    if (typeof window === 'undefined' || !window.XMLHttpRequest) return;
+    
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+    const originalXHRSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+    
+    XMLHttpRequest.prototype.open = function(method, url, ...args) {
+      this._url = url;
+      this._method = method;
+      return originalXHROpen.apply(this, [method, url, ...args]);
+    };
+    
+    XMLHttpRequest.prototype.send = function(body) {
+      this._requestBody = body;
+      this._requestJson = null;
+      
+      // Try to parse request body if it's JSON
+      if (body && typeof body === 'string') {
+        try {
+          this._requestJson = JSON.parse(body);
+        } catch (_) {}
+      }
+      
+      // Set up response interceptor
+      const originalOnReadyStateChange = this.onreadystatechange;
+      this.onreadystatechange = function() {
+        if (this.readyState === 4 && this.status === 200) {
+          try {
+            const url = this._url || '';
+            if (url.includes('/graphql')) {
+              const requestJson = this._requestJson;
+              const isMutualInboxRequest = requestJson?.operationName === 'MutualInboxConversationHistory' ||
+                                           (this._requestBody && String(this._requestBody).toLowerCase().includes('mutualinboxconversationhistory'));
+              
+              if (isMutualInboxRequest) {
+                try {
+                  const json = JSON.parse(this.responseText);
+                  processMutualInboxResponse(json, requestJson);
+                } catch (err) {
+                  console.warn('[AI Assistant] Error parsing XHR GraphQL response:', err);
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('[AI Assistant] Error intercepting GraphQL XHR response:', err);
+          }
+        }
+        
+        // Call original handler if it exists
+        if (originalOnReadyStateChange) {
+          originalOnReadyStateChange.apply(this, arguments);
+        }
+      };
+      
+      // Also handle addEventListener('readystatechange')
+      const originalAddEventListener = this.addEventListener;
+      this.addEventListener = function(type, listener, ...args) {
+        if (type === 'readystatechange' || type === 'load') {
+          const wrappedListener = function() {
+            if (this.readyState === 4 && this.status === 200) {
+              try {
+                const url = this._url || '';
+                if (url.includes('/graphql')) {
+                  const requestJson = this._requestJson;
+                  const isMutualInboxRequest = requestJson?.operationName === 'MutualInboxConversationHistory' ||
+                                               (this._requestBody && String(this._requestBody).toLowerCase().includes('mutualinboxconversationhistory'));
+                  
+                  if (isMutualInboxRequest) {
+                    try {
+                      const json = JSON.parse(this.responseText);
+                      processMutualInboxResponse(json, requestJson);
+                    } catch (err) {
+                      console.warn('[AI Assistant] Error parsing XHR GraphQL response:', err);
+                    }
+                  }
+                }
+              } catch (err) {
+                console.warn('[AI Assistant] Error intercepting GraphQL XHR response:', err);
+              }
+            }
+            listener.apply(this, arguments);
+          };
+          return originalAddEventListener.apply(this, [type, wrappedListener, ...args]);
+        }
+        return originalAddEventListener.apply(this, arguments);
+      };
+      
+      return originalXHRSend.apply(this, arguments);
     };
   })();
 
