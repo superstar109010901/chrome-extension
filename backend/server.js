@@ -194,13 +194,13 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
   if (isEmptyConversation) {
     // First greeting for empty conversation
     userPrompt = partnerName && typeof partnerName === 'string' && partnerName.trim()
-      ? `Generate a friendly first greeting message for ${partnerName.trim()}. Keep it short, casual, and engaging.`
-      : 'Generate a friendly first greeting message. Keep it short, casual, and engaging.';
+      ? `This is a new conversation with ${partnerName.trim()}. Please make a natural, short first greeting message.`
+      : 'This is a new conversation. Please make a natural, short first greeting message.';
     systemPrompt += `\n\nThis is the FIRST message in a new conversation. Generate an opening greeting that is friendly, casual, and inviting.`;
   } else if (shouldGenerateCTA) {
-    userPrompt = 'Generate ONE short sentence that clearly invites him to move this chat to the requested platform (Instagram or Snapchat) using the handle provided in the system.';
+    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response that also naturally suggests moving this chat to the requested platform (Instagram or Snapchat) using the handle provided in the system.';
   } else {
-    userPrompt = `Generate a short, casual reply that directly responds to their last message: "${lastIncoming || ''}"`;
+    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response.';
   }
 
   const baseMessagesForAPI = [
