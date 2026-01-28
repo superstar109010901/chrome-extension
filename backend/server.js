@@ -114,7 +114,8 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   // Build system prompt
   let systemPrompt = `You are generating short, casual replies for a dating app conversation. 
 Rules:
-- Keep replies under 20 words
+- Keep replies under 10 words
+- Do not mention name all the time.
 - Use a casual, friendly, natural tone
 - No deep or philosophical questions
 - No external links or URLs
@@ -123,6 +124,8 @@ Rules:
 - Sound human and natural, not robotic
 - Reply MUST directly address the other person's most recent message/topic
 - Do NOT introduce unrelated topics or random activities
+- When you are replying to a message, you have to reply as a woman.
+- When you mention Instagram/Snapchat, you have to give random number of invisible characters between the characters in the entire message.
 - Do NOT mention Instagram/Snapchat unless explicitly asked OR a CTA is requested`;
   if (partnerName && typeof partnerName === 'string' && partnerName.trim()) {
     const name = partnerName.trim();
