@@ -92,7 +92,8 @@
     // Swipe settings
     swipeEnabled: false,
     swipeLikePercent: 50,
-    swipeIntervalSeconds: 6
+    swipeIntervalSecondsMin: 4,
+    swipeIntervalSecondsMax: 8
   };
 
   // Swipe state
@@ -446,7 +447,8 @@
     const candidates = queryAll('button, [role="button"], input[type="button"], input[type="submit"]');
     for (const el of candidates) {
       try {
-        const t = ((el.textContent || el.value || '') + '').trim().toLowerCase();
+        const raw = ((el.textContent || el.value || '') + '').trim();
+        const t = raw.toLowerCase();
         if (!t) continue;
         if (options.exact) {
           if (t === label) return el;
@@ -458,6 +460,135 @@
       }
     }
     return null;
+  }
+
+  /**
+   * Helper: determine whether a button label represents the normal "Like"
+   * action on Discover (and NOT "Super Like").
+   */
+  function isNormalLikeText(textLower) {
+    if (!textLower) return false;
+    const t = textLower.trim();
+    if (!t.includes('like')) return false;
+    if (t.includes('super like')) return false;
+    return true;
+  }
+
+  /**
+   * Specifically find the normal "Like" button on Discover, NOT "Super Like".
+   * We prefer text that is exactly "like", and explicitly ignore any button
+   * whose text includes "super like".
+   */
+  function findPrimaryLikeButton() {
+    const candidates = queryAll('button, [role="button"], input[type="button"], input[type="submit"]');
+    let best = null;
+    for (const el of candidates) {
+      try {
+        const textLower = ((el.textContent || el.value || '') + '').toLowerCase();
+        if (!isNormalLikeText(textLower)) continue;
+        const text = textLower.trim();
+        // Ideal case: text is exactly "like"
+        if (text === 'like') {
+          best = el;
+          break;
+        }
+        // Fallback: any other label that still clearly contains "like"
+        if (!best) {
+          best = el;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Try to locate the main swipe action row (Skip / Super Like / Like)
+   * and return the specific Skip and Like buttons from that row.
+   * This avoids accidentally picking some other "Skip" on the page.
+   */
+  function getSwipeRowButtons() {
+    const allButtons = queryAll('button, [role="button"], input[type="button"], input[type="submit"]');
+
+    // Pass 1: Start from the visible "Like" button, walk up to find a sibling "Skip".
+    try {
+      for (const btn of allButtons) {
+        const textLower = ((btn.textContent || btn.value || '') + '').toLowerCase();
+        if (!isNormalLikeText(textLower)) continue;
+
+        // Walk up a few levels to find a container that also has a Skip button.
+        let container = btn.parentElement;
+        for (let depth = 0; depth < 4 && container; depth++) {
+          const rowButtons = Array.from(
+            container.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]')
+          );
+          let likeBtn = null;
+          let skipBtn = null;
+          for (const rb of rowButtons) {
+            const rbTextLower = ((rb.textContent || rb.value || '') + '').toLowerCase();
+            if (!isNormalLikeText(rbTextLower)) {
+              const trimmed = rbTextLower.trim();
+              if (trimmed === 'skip') {
+                skipBtn = rb;
+              }
+              continue;
+            }
+            const trimmed = rbTextLower.trim();
+            if (trimmed === 'like') {
+              likeBtn = rb;
+            } else if (!likeBtn) {
+              // any other valid like-labeled button
+              likeBtn = rb;
+            }
+          }
+          if (likeBtn && skipBtn) {
+            return { likeButton: likeBtn, skipButton: skipBtn };
+          }
+          container = container.parentElement;
+        }
+      }
+    } catch (_) {
+      // ignore and try fallback strategy
+    }
+
+    // Pass 2: Fallback to starting from a Skip button, as before.
+    for (const btn of allButtons) {
+      try {
+        const textLower = ((btn.textContent || btn.value || '') + '').toLowerCase();
+        if (!textLower.trim().includes('skip')) continue;
+        const parent = btn.parentElement;
+        if (!parent) continue;
+        const rowButtons = Array.from(
+          parent.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]')
+        );
+        let likeBtn = null;
+        let skipBtn = null;
+        for (const rb of rowButtons) {
+          const rbTextLower = ((rb.textContent || rb.value || '') + '').toLowerCase();
+          const trimmed = rbTextLower.trim();
+          if (trimmed === 'skip') {
+            skipBtn = rb;
+            continue;
+          }
+          if (!isNormalLikeText(rbTextLower)) continue;
+          if (!likeBtn || trimmed === 'like') {
+            likeBtn = rb;
+          }
+        }
+        if (likeBtn && skipBtn) {
+          return { likeButton: likeBtn, skipButton: skipBtn };
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    // Final fallback to generic finders (still avoiding Super Like).
+    return {
+      likeButton: findPrimaryLikeButton(),
+      skipButton: findButtonByText('skip', { exact: true })
+    };
   }
 
   /**
@@ -474,42 +605,33 @@
 
     isSwiping = true;
     try {
-      const likePercent = Math.min(100, Math.max(0, Number(settings.swipeLikePercent) || 0));
-      const shouldLike = Math.random() * 100 < likePercent;
+      // Always aim to click LIKE first; never click initial Skip / Super Like.
+      // If Like button is not yet present, just wait for the next tick.
 
-      console.log(`[AI Assistant] [Swipe] Tick on Discover – decision=${shouldLike ? 'LIKE' : 'SKIP'} (target like %: ${likePercent}%)`);
+      // IMPORTANT: only use the normal Like button from the main swipe row, never Super Like
+      const { likeButton } = getSwipeRowButtons();
 
-      const likeButton = findButtonByText('like', { exact: false });
-      const skipButton = findButtonByText('skip', { exact: false });
-
-      if (!likeButton && !skipButton) {
-        console.log('[AI Assistant] [Swipe] No Like/Skip buttons found on page – waiting for profile card.');
+      if (!likeButton) {
+        console.log('[AI Assistant] [Swipe] Like button not found yet – waiting for it to appear.');
         return;
       }
 
-      if (shouldLike && likeButton) {
-        likeButton.click();
-        console.log('[AI Assistant] [Swipe] Clicked Like on current profile.');
-        // Wait briefly for any post-like dialog (e.g. "Next profile", "Skip") to appear
-        await new Promise((r) => setTimeout(r, 1500));
+      likeButton.click();
+      console.log('[AI Assistant] [Swipe] Clicked Like on current profile.');
 
-        const nextProfileButton = findButtonByText('next profile', { exact: false });
-        const postLikeSkip = findButtonByText('skip', { exact: false });
+      // Wait briefly for any post-like UI (e.g. "Next profile", "Skip") to appear,
+      // then use those ONLY to move to the next profile.
+      await new Promise((r) => setTimeout(r, 1500));
 
-        if (nextProfileButton) {
-          nextProfileButton.click();
-          console.log('[AI Assistant] [Swipe] Clicked Next profile after Like.');
-        } else if (postLikeSkip) {
-          postLikeSkip.click();
-          console.log('[AI Assistant] [Swipe] Clicked Skip after Like (no Next profile button).');
-        }
-      } else if (!shouldLike && skipButton) {
-        skipButton.click();
-        console.log('[AI Assistant] [Swipe] Clicked Skip (decided not to Like).');
-      } else if (shouldLike && !likeButton && skipButton) {
-        // Fallback: if Like button is missing but Skip is available, at least move to next profile
-        skipButton.click();
-        console.log('[AI Assistant] [Swipe] Like requested but Like button missing – clicked Skip instead.');
+      const nextProfileButton = findButtonByText('next profile', { exact: false });
+      const postLikeSkip = findButtonByText('skip', { exact: false });
+
+      if (nextProfileButton) {
+        nextProfileButton.click();
+        console.log('[AI Assistant] [Swipe] Clicked Next profile after Like.');
+      } else if (postLikeSkip) {
+        postLikeSkip.click();
+        console.log('[AI Assistant] [Swipe] Clicked Skip after Like (no Next profile button).');
       }
     } catch (err) {
       console.error('[AI Assistant] [Swipe] Error during swipe tick:', err);
@@ -539,15 +661,23 @@
       return;
     }
 
-    const intervalMs = Math.min(
-      60000,
-      Math.max(2000, (Number(settings.swipeIntervalSeconds) || 6) * 1000)
+    const minSec = Number(settings.swipeIntervalSecondsMin) || 4;
+    const maxSec = Number(settings.swipeIntervalSecondsMax) || minSec + 2;
+    const safeMinSec = Math.max(2, Math.min(60, minSec));
+    const safeMaxSec = Math.max(safeMinSec, Math.min(60, maxSec));
+    const initialIntervalSec = randomBetween(
+      Math.round(safeMinSec),
+      Math.round(safeMaxSec)
     );
+    const intervalMs = initialIntervalSec * 1000;
 
     const sessionAtStart = swipeSessionId;
-    console.log(`[AI Assistant] [Swipe] Activating auto-swipe on Discover – every ${intervalMs} ms, like ~${settings.swipeLikePercent}% of profiles.`);
+    console.log(
+      `[AI Assistant] [Swipe] Activating auto-swipe on Discover – random delay ${safeMinSec}-${safeMaxSec}s between swipes, like ~${settings.swipeLikePercent}% of profiles.`
+    );
     swipeIntervalId = setInterval(() => {
       try {
+        // Each tick, re-randomize within the configured range by adding a timeout
         performSwipeTick(sessionAtStart);
       } catch (err) {
         console.error('[AI Assistant] [Swipe] Error in interval handler:', err);

@@ -431,11 +431,13 @@
           <span>⏱️</span> Swipe Interval
         </div>
         <div class="delay-input">
-          <input type="number" class="input-field" id="swipeIntervalSeconds" min="2" max="60" value="6">
-          <span class="delay-unit">seconds between swipes</span>
+          <input type="number" class="input-field" id="swipeIntervalSecondsMin" min="2" max="60" value="4">
+          <span class="delay-unit">to</span>
+          <input type="number" class="input-field" id="swipeIntervalSecondsMax" min="2" max="60" value="8">
+          <span class="delay-unit">seconds</span>
         </div>
         <div class="toggle-sublabel" style="margin-top: 4px;">
-          Shorter intervals look more aggressive; longer intervals feel more human.
+          A random delay within this range will be used between each swipe.
         </div>
       </div>
     </div>

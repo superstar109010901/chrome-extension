@@ -331,7 +331,8 @@ const DEFAULT_SETTINGS = {
   // Swipe settings
   swipeEnabled: false,
   swipeLikePercent: 50,
-  swipeIntervalSeconds: 6
+  swipeIntervalSecondsMin: 4,
+  swipeIntervalSecondsMax: 8
 };
 
 /**
@@ -392,7 +393,8 @@ app.post('/settings', async (req, res) => {
       ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
       swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,
       swipeLikePercent: src.swipeLikePercent ?? DEFAULT_SETTINGS.swipeLikePercent,
-      swipeIntervalSeconds: src.swipeIntervalSeconds ?? DEFAULT_SETTINGS.swipeIntervalSeconds
+      swipeIntervalSecondsMin: src.swipeIntervalSecondsMin ?? DEFAULT_SETTINGS.swipeIntervalSecondsMin,
+      swipeIntervalSecondsMax: src.swipeIntervalSecondsMax ?? DEFAULT_SETTINGS.swipeIntervalSecondsMax
     });
 
     const settings = normalizeSettings(newSettings);

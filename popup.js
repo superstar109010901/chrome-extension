@@ -45,7 +45,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Swipe tab elements
   const swipeEnabledEl = document.getElementById('swipeEnabled');
   const swipeLikePercentEl = document.getElementById('swipeLikePercent');
-  const swipeIntervalSecondsEl = document.getElementById('swipeIntervalSeconds');
+  const swipeIntervalSecondsMinEl = document.getElementById('swipeIntervalSecondsMin');
+  const swipeIntervalSecondsMaxEl = document.getElementById('swipeIntervalSecondsMax');
   const tabs = Array.from(document.querySelectorAll('.tab'));
   const tabContents = {
     chat: document.getElementById('chatTab'),
@@ -74,7 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Swipe settings
     swipeEnabled: false,
     swipeLikePercent: 50,
-    swipeIntervalSeconds: 6
+    swipeIntervalSecondsMin: 4,
+    swipeIntervalSecondsMax: 8
   };
 
   // Load settings directly from backend API (MongoDB)
@@ -118,7 +120,8 @@ document.addEventListener('DOMContentLoaded', () => {
       // Swipe
       swipeEnabledEl.checked = DEFAULT_SETTINGS.swipeEnabled;
       swipeLikePercentEl.value = DEFAULT_SETTINGS.swipeLikePercent ?? 50;
-      swipeIntervalSecondsEl.value = DEFAULT_SETTINGS.swipeIntervalSeconds ?? 6;
+      swipeIntervalSecondsMinEl.value = DEFAULT_SETTINGS.swipeIntervalSecondsMin ?? 4;
+      swipeIntervalSecondsMaxEl.value = DEFAULT_SETTINGS.swipeIntervalSecondsMax ?? 8;
       
       updateUIVisibility();
       
@@ -148,7 +151,8 @@ document.addEventListener('DOMContentLoaded', () => {
       ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
       swipeEnabledEl.checked = settings.swipeEnabled;
       swipeLikePercentEl.value = settings.swipeLikePercent ?? 50;
-      swipeIntervalSecondsEl.value = settings.swipeIntervalSeconds ?? 6;
+      swipeIntervalSecondsMinEl.value = settings.swipeIntervalSecondsMin ?? 4;
+      swipeIntervalSecondsMaxEl.value = settings.swipeIntervalSecondsMax ?? 8;
       updateUIVisibility();
     }
   }
@@ -174,7 +178,8 @@ document.addEventListener('DOMContentLoaded', () => {
       ctaAfterMessages: parseInt(ctaAfterMessagesEl.value, 10),
       swipeEnabled: swipeEnabledEl.checked,
       swipeLikePercent: parseInt(swipeLikePercentEl.value, 10),
-      swipeIntervalSeconds: parseInt(swipeIntervalSecondsEl.value, 10)
+      swipeIntervalSecondsMin: parseInt(swipeIntervalSecondsMinEl.value, 10),
+      swipeIntervalSecondsMax: parseInt(swipeIntervalSecondsMaxEl.value, 10)
     };
 
     if (!Number.isFinite(settings.ctaAfterMessages) || settings.ctaAfterMessages < 0) settings.ctaAfterMessages = 0;
@@ -183,9 +188,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Validate swipe values
     if (!Number.isFinite(settings.swipeLikePercent)) settings.swipeLikePercent = 50;
     settings.swipeLikePercent = Math.min(100, Math.max(0, settings.swipeLikePercent));
-    if (!Number.isFinite(settings.swipeIntervalSeconds)) settings.swipeIntervalSeconds = 6;
-    if (settings.swipeIntervalSeconds < 2) settings.swipeIntervalSeconds = 2;
-    if (settings.swipeIntervalSeconds > 60) settings.swipeIntervalSeconds = 60;
+    if (!Number.isFinite(settings.swipeIntervalSecondsMin)) settings.swipeIntervalSecondsMin = 4;
+    if (!Number.isFinite(settings.swipeIntervalSecondsMax)) settings.swipeIntervalSecondsMax = 8;
+    if (settings.swipeIntervalSecondsMin < 2) settings.swipeIntervalSecondsMin = 2;
+    if (settings.swipeIntervalSecondsMax < settings.swipeIntervalSecondsMin) {
+      settings.swipeIntervalSecondsMax = settings.swipeIntervalSecondsMin + 2;
+    }
+    if (settings.swipeIntervalSecondsMax > 60) settings.swipeIntervalSecondsMax = 60;
 
     // Validate delay values
     if (settings.replyDelayMin < 1) settings.replyDelayMin = 1;
