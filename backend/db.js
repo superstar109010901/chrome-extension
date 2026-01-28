@@ -49,6 +49,15 @@ async function getSettingsCollection() {
 }
 
 /**
+ * Get OpenAI keys collection
+ * Stores a single document containing the OpenAI API key.
+ */
+async function getOpenAIKeysCollection() {
+  const database = await getDB();
+  return database.collection('openai_keys');
+}
+
+/**
  * Close MongoDB connection
  */
 async function closeDB() {
@@ -64,5 +73,6 @@ module.exports = {
   connectDB,
   getDB,
   getSettingsCollection,
+  getOpenAIKeysCollection,
   closeDB
 };

@@ -8,7 +8,7 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
-const { connectDB, getSettingsCollection } = require('./db');
+const { connectDB, getSettingsCollection, getOpenAIKeysCollection } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -90,13 +90,12 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
     throw new Error('OpenAI client not available. Install the openai package.');
   }
 
-  // Load settings to get OpenAI API key (DB preferred)
-  const settingsCollection = await getSettingsCollection();
-  const settingsDoc = await settingsCollection.findOne({});
-  const effectiveSettings = normalizeSettings(settingsDoc || {});
-  const apiKeyFromDb = effectiveSettings.openaiApiKey && effectiveSettings.openaiApiKey.trim();
+  // Load OpenAI API key from dedicated collection (DB only)
+  const keysCollection = await getOpenAIKeysCollection();
+  const keyDoc = await keysCollection.findOne({});
+  const apiKeyFromDb = (keyDoc?.apiKey || '').trim();
   if (!apiKeyFromDb) {
-    throw new Error('OpenAI API key not configured in database (openaiApiKey is empty)');
+    throw new Error('OpenAI API key not configured in database (openai_keys.apiKey is empty)');
   }
   const openaiClient = new OpenAIClass({ apiKey: apiKeyFromDb });
 
@@ -530,12 +529,7 @@ app.post('/settings', async (req, res) => {
   try {
     const settingsCollection = await getSettingsCollection();
     const newSettings = req.body;
-    const incomingKey =
-      (typeof newSettings.openaiApiKey === 'string' ? newSettings.openaiApiKey : undefined) ??
-      (typeof newSettings.open_ai_api_key === 'string' ? newSettings.open_ai_api_key : undefined);
-    if (typeof incomingKey === 'string') {
-      console.log(`[Backend] Received openaiApiKey update (length=${incomingKey.trim().length})`);
-    }
+    // NOTE: OpenAI API key is no longer stored in settings; it's in openai_keys collection.
 
     // Load existing settings (if any) so partial updates don't wipe fields
     const existingDoc = await settingsCollection.findOne({});
@@ -574,6 +568,60 @@ app.post('/settings', async (req, res) => {
       error: 'Failed to save settings',
       message: error.message 
     });
+  }
+});
+
+/**
+ * OpenAI API key management (separate collection: openai_keys)
+ *
+ * GET /openai-key
+ *   -> { hasKey: boolean }
+ * POST /openai-key
+ *   body: { apiKey: string }
+ * DELETE /openai-key
+ *   -> removes stored key
+ */
+app.get('/openai-key', async (req, res) => {
+  try {
+    const keysCollection = await getOpenAIKeysCollection();
+    const doc = await keysCollection.findOne({});
+    const hasKey = !!(doc?.apiKey && String(doc.apiKey).trim());
+    res.json({ hasKey });
+  } catch (error) {
+    console.error('Error getting OpenAI key:', error);
+    res.status(500).json({ error: 'Failed to get OpenAI key', message: error.message });
+  }
+});
+
+app.post('/openai-key', async (req, res) => {
+  try {
+    const keysCollection = await getOpenAIKeysCollection();
+    const apiKey = (req.body?.apiKey || '').trim();
+    if (!apiKey) {
+      return res.status(400).json({ error: 'apiKey is required' });
+    }
+    await keysCollection.updateOne(
+      {},
+      { $set: { apiKey, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    );
+    console.log(`[Backend] OpenAI key saved (length=${apiKey.length})`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving OpenAI key:', error);
+    res.status(500).json({ error: 'Failed to save OpenAI key', message: error.message });
+  }
+});
+
+app.delete('/openai-key', async (req, res) => {
+  try {
+    const keysCollection = await getOpenAIKeysCollection();
+    await keysCollection.deleteMany({});
+    console.log('[Backend] OpenAI key removed');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting OpenAI key:', error);
+    res.status(500).json({ error: 'Failed to delete OpenAI key', message: error.message });
   }
 });
 

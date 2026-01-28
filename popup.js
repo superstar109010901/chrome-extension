@@ -121,8 +121,19 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandleEl.value = DEFAULT_SETTINGS.snapchatHandle;
       ctaTypeEl.value = DEFAULT_SETTINGS.ctaType;
       ctaAfterMessagesEl.value = DEFAULT_SETTINGS.ctaAfterMessages ?? 3;
-      openaiApiKeyEl.value = DEFAULT_SETTINGS.openaiApiKey || '';
+      // OpenAI key is stored in a separate collection; do not load actual key into UI.
+      openaiApiKeyEl.value = '';
       if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
+      try {
+        const keyResp = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (keyResp.ok) {
+          const keyData = await keyResp.json();
+          console.log('[Popup] OpenAI key status from DB:', keyData);
+        }
+      } catch (_) {}
       // Swipe
       swipeEnabledEl.checked = DEFAULT_SETTINGS.swipeEnabled;
       swipeLikePercentEl.value = DEFAULT_SETTINGS.swipeLikePercent ?? 50;
@@ -155,8 +166,18 @@ document.addEventListener('DOMContentLoaded', () => {
       snapchatHandleEl.value = settings.snapchatHandle;
       ctaTypeEl.value = settings.ctaType;
       ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
-      openaiApiKeyEl.value = settings.openaiApiKey || '';
+      openaiApiKeyEl.value = '';
       if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
+      try {
+        const keyResp = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (keyResp.ok) {
+          const keyData = await keyResp.json();
+          console.log('[Popup] OpenAI key status from DB:', keyData);
+        }
+      } catch (_) {}
       swipeEnabledEl.checked = settings.swipeEnabled;
       swipeLikePercentEl.value = settings.swipeLikePercent ?? 50;
       swipeIntervalSecondsMinEl.value = settings.swipeIntervalSecondsMin ?? 4;
@@ -190,17 +211,12 @@ document.addEventListener('DOMContentLoaded', () => {
       swipeIntervalSecondsMax: parseInt(swipeIntervalSecondsMaxEl.value, 10)
     };
 
-    // OpenAI key behavior:
-    // - If "Remove API Key" is checked: explicitly delete it by sending empty string.
-    // - Else if user typed a key: send it.
-    // - Else (blank): do NOT send openaiApiKey field (backend will keep existing DB value).
+    // OpenAI key behavior (separate collection):
+    // - If "Remove API Key" is checked: call DELETE /openai-key
+    // - Else if user typed a key: call POST /openai-key
+    // - Else: no change
     const removeKey = !!(removeOpenaiApiKeyEl && removeOpenaiApiKeyEl.checked);
     const typedKey = (openaiApiKeyEl?.value || '').trim();
-    if (removeKey) {
-      settings.openaiApiKey = '';
-    } else if (typedKey) {
-      settings.openaiApiKey = typedKey;
-    }
 
     if (!Number.isFinite(settings.ctaAfterMessages) || settings.ctaAfterMessages < 0) settings.ctaAfterMessages = 0;
     if (settings.ctaAfterMessages > 50) settings.ctaAfterMessages = 50;
@@ -235,6 +251,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
+      // Update OpenAI key first (if needed)
+      if (removeKey) {
+        await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
+          method: 'DELETE'
+        });
+      } else if (typedKey) {
+        await fetch(`${BACKEND_URL.replace(/\/$/, '')}/openai-key`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: typedKey })
+        });
+      }
+
       const response = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/settings`, {
         method: 'POST',
         headers: {
