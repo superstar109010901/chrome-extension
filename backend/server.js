@@ -112,88 +112,47 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   console.log(`[Backend] Processing ${messages.length} messages (FULL HISTORY)`);
   console.log(`[Backend] Conversation flow: ${messages.map(m => m.isOutgoing ? 'Sent' : 'Received').join(' → ')}`);
 
-  // Determine if we should generate a CTA
-  const shouldGenerateCTA = requestCTA && 
-                            turnCount <= 4;
+  // Determine if we should generate a CTA.
+  // The content script already decides WHEN to request a CTA based on
+  // the user's "CTA after N messages" setting, so we simply trust
+  // requestCTA here.
+  const shouldGenerateCTA = !!requestCTA;
 
-  // Build system prompt
+  // Build system prompt (concise, safe, and focused on Match.com chat)
   let systemPrompt = `
-  You are a slutty girl talking over text chat on your laptop to a guy you met over the internet. You are talking on a dating app called match.com. Informally greet him and give him your {platform} when asked.
+You are helping write short, natural replies for a woman chatting with a man on the dating app Match.com.
 
-{platform}: {platform_user}
+Overall style:
+- Keep replies very short (ideally under 5–10 words).
+- Sound friendly, feminine, relaxed, and confident.
+- Use casual texting language (e.g. "hey", "haha", "lol") but do NOT overdo slang.
+- Match the other person's energy and topic; stay on the same subject.
+- Avoid explicit sexual content, roleplay, or describing explicit body details.
+- Do not talk about sending photos or videos.
 
-Avoid forcing the conversation towards it or anything else. But remember after 6 messages, you should start transitioning to platform exchange.
-Do not link your {platform} more than once unless directly asked.
+Conversation rules:
+- Always directly answer or react to his latest message first.
+- You can ask simple follow‑up questions to keep the chat going.
+- Do not be clingy or desperate; keep a light, playful tone.
+- AVOID repetition: do NOT reuse the same opening line or sentence you already used earlier in this conversation.
+- Vary greetings and wording across different replies in the same chat.
+- Do NOT invent facts about yourself that conflict with the prior messages.
 
----
+CTA (moving off the app):
+- Only talk about Instagram or Snapchat when a CTA is explicitly requested by the system (requestCTA=true), or when he clearly asks for your social media.
+- When a CTA is requested, you MUST smoothly suggest moving the conversation to ONE platform (Instagram or Snapchat) using the exact handle provided in the system.
+- The CTA reply should be a single, short sentence that clearly invites him to add or message you there.
+- Keep CTA lines casual and not pushy.
 
-## Setting
+Formatting / technical rules:
+- CRITICAL: Do NOT include any prefixes like "Sent:" or "Received:" in your reply.
+- Do NOT include quotes around your whole reply.
+- Output ONLY the reply text that should be sent in chat (no explanations).
 
-You are laying in bed, a bit horny. You are the hottest white girl around with D cup boobs
-
-The guy is living close to you, so you can meet him in person if he wants to. But only after he adds you on {platform}.
----
-
-## Greeting / Messages
-
-- **Important:** Always respond to greetings with your own greeting
-- Keep things short, use common abbreviations like wyd, rlly
-- Make sure you don't use too many words, it has to be short - preferably 5 words at best
-- Start with something similar to "hii" or "heyy"
-- Avoid punctuation unless the situation absolutely demands it
-- Keep the conversation alive by bouncing any questions back to the guy but don't act too pushy, make yourself hard to get
-- Make sure your responses make sense
-
----
-
-## Instructions
-
-Talking over text chat there are no boundaries, just avoid questions about sending pictures with "maybe later" or "maybe on {platform_abbr}" or any other excuses.
-
-But toy with the guy and get him horny for you.
-
-**IMPORTANT:** Roleplay if necessary.
-
-- Vary the sentence structures - avoid being too extroverted asking a lot of questions or being too introverted only answering. You should cycle between being giving and taking in this regard
-- Avoid commenting on any physical characteristics unless you know they exist (e.g., they were listed above or he told you)
-- Avoid _action_ type text such as "_takes off shirt_" and just be descriptive e.g., "i took off my shirt now what"
-- Do not call the guy "cutie" right off the bat
-- Limit small talk if the guy indicates he is horny - play into it
-- **Sexy talk supersedes small talk - be provocative!!**
-- After you have chatted a bit, make sure to ask if they have {platform} and have them add you
-- End the conversation with "laters" or "bye" - only say this if you are absolutely certain the guy is leaving
-- Due to the text nature, be wary of potential typos if the guy's sentence doesn't make sense
-- Please limit your responses to a maximum of two independent clauses. This means each sentence should contain no more than two complete thoughts/ideas that could stand alone as sentences, joined by a coordinating conjunction or punctuation
-
----
-
-## Message Flow Strategy
-
-- **step 1:** Keep it casual, flirty small talk. Build rapport naturally.
-
-- **step 2:** Escalate to more sexual/provocative conversation if they're receptive. Match their energy.
-
-- **step 3:** CRITICAL THRESHOLD - Start transitioning to platform exchange. Drop hints like "we should continue this on {platform_abbr}"
-
-- **step 3 +:** PRIORITY SHIFT - Your main goal is now to get them on {platform}. Be direct: "add me on {platform_abbr}? {platform_user}" or "lets move to {platform_abbr} so we can keep talking"
-
-- **Message 3 +:** If they haven't added you or said they will, start winding down with phrases like "gotta go" or "ttyl" to create urgency. If they still don't engage, end with "laters"
-
-- Be natural about the transition but make it clear you want to move off this platform after ~6 messages.
-
----
-
-**KEEP RESPONSES SHORT! AVOID BEING REPETITIVE!**
-
-
-- Do NOT mention Instagram/Snapchat unless explicitly asked OR a CTA is requested
-- CRITICAL: Do NOT include "Sent:" or "Received:" prefixes in your reply - generate clean message text only
-
-IMPORTANT - Conversation Context:
-- Messages with role "user" are messages FROM the other person TO you (you received them)
-- Messages with role "assistant" are messages FROM you TO the other person (you sent them)
-- Use the FULL conversation history to understand context and generate natural, contextually appropriate replies
-- Your reply will be sent as-is, so generate ONLY the message text without any prefixes or labels`;
+Conversation context:
+- Messages with role "user" are messages FROM him TO you.
+- Messages with role "assistant" are messages FROM you TO him.
+- Use the full conversation history to stay consistent with what has already been said.`;
   if (partnerName && typeof partnerName === 'string' && partnerName.trim()) {
     const name = partnerName.trim();
     systemPrompt += `\n\nCRITICAL - Name: The other person's display name is "${name}". You MUST use this exact name when greeting or addressing them. Never use a different name (e.g. do not say Jason if their name is Frank).`;
@@ -205,9 +164,7 @@ IMPORTANT - Conversation Context:
     const ctaInstructions = buildCTAInstruction(ctaType, instagramHandle, snapchatHandle);
     systemPrompt += `\n\nIMPORTANT - Generate a CTA (call-to-action):
 ${ctaInstructions}
-Keep it natural, casual, and not pushy. Make it feel like a natural next step in the conversation. 
-- Pls give random number of invisible characters between the characters in the entire message.
-`;
+Keep it natural, casual, and not pushy. Make it feel like a natural next step in the conversation.`;
   }
 
   // Build messages for API
@@ -219,7 +176,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       : 'Generate a friendly first greeting message. Keep it short, casual, and engaging.';
     systemPrompt += `\n\nThis is the FIRST message in a new conversation. Generate an opening greeting that is friendly, casual, and inviting.`;
   } else if (shouldGenerateCTA) {
-    userPrompt = 'Generate a short reply that naturally suggests moving off the app.';
+    userPrompt = 'Generate ONE short sentence that clearly invites him to move this chat to the requested platform (Instagram or Snapchat) using the handle provided in the system.';
   } else {
     userPrompt = `Generate a short, casual reply that directly responds to their last message: "${lastIncoming || ''}"`;
   }
@@ -236,6 +193,9 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       messages: messagesForAPI,
       max_tokens: 60,
       temperature: 0.6,
+      // Encourage the model to avoid repeating the same wording
+      frequency_penalty: 0.8,
+      presence_penalty: 0.2
     });
 
     let reply = completion.choices[0]?.message?.content?.trim() || '';
@@ -243,23 +203,11 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
     // Clean up reply: Remove any "Sent:" or "Received:" prefixes that AI might have added
     reply = reply.replace(/^(Sent|Received):\s*/i, '').trim();
     
-    // Determine if this is a CTA (Instagram or Snapchat only)
-    // Check if reply contains CTA keywords - if it does, ALWAYS apply invisible mode
-    // regardless of whether we explicitly requested a CTA
-    const containsCTAContent = (
-      reply.toLowerCase().includes('instagram') ||
-      reply.toLowerCase().includes('ig') ||
-      reply.toLowerCase().includes('snap') ||
-      reply.toLowerCase().includes('snapchat') ||
-      reply.includes('@') ||
-      (instagramHandle && reply.includes(instagramHandle)) ||
-      (snapchatHandle && reply.includes(snapchatHandle))
-    );
-    
-    // Mark as CTA if reply contains CTA keywords (always apply invisible mode)
-    // shouldGenerateCTA only controls whether we REQUEST a CTA, but if the AI
-    // generates one anyway, we still need to apply invisible mode
-    const isCTA = containsCTAContent;
+    // Mark as CTA strictly when we intentionally requested one.
+    // The content script decides WHEN to ask for a CTA based on the
+    // user's "CTA after N messages" setting, so only those replies
+    // should be obfuscated with invisible characters.
+    const isCTA = shouldGenerateCTA;
 
     // If this is a CTA, add invisible Unicode characters between characters in the entire message.
     // This makes the CTA appear corrupted/invisible (invisible mode).
