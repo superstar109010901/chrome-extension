@@ -905,8 +905,10 @@
 
       const partnerName = getPartnerDisplayName();
       // Send FULL chat history (not limited) with explicit direction labels
+      // IMPORTANT: order newest → oldest so backend/AI sees latest first
+      const orderedMessages = [...messages].reverse();
       const payload = {
-        messages: messages.map(m => ({
+        messages: orderedMessages.map(m => ({
           text: m.text,
           isOutgoing: m.isOutgoing,
           direction: m.isOutgoing ? 'sent' : 'received' // Explicit label for AI context
@@ -1941,6 +1943,10 @@
             isOutgoing: item.direction === 'Sent',
             timestamp: new Date(item.sentDate).getTime()
           }));
+
+        // IMPORTANT: Normalize order to oldest → newest so "latest message" is always the LAST element.
+        // Match.com GraphQL often returns newest-first; our skip/turn logic assumes newest-last.
+        messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
         
         console.log(`[AI Assistant] 📋 GraphQL response: ${totalItems} total items, ${messages.length} type=Message items`);
         
