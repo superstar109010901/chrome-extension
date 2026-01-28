@@ -100,19 +100,18 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
   // Check if this is an empty conversation (no messages yet)
   const isEmptyConversation = !messages || messages.length === 0;
 
-  // Build conversation context with explicit direction labels for AI understanding
-  // Format: "Received: [message]" or "Sent: [message]" so AI understands conversation flow
+  // Build conversation context - use roles to indicate direction (assistant = sent by us, user = received from them)
   // Send FULL chat history so AI has complete context
+  // DO NOT add "Sent:" or "Received:" labels to content - AI should generate clean messages without prefixes
   const conversationHistory = messages.map((msg, index) => {
-    const direction = msg.direction || (msg.isOutgoing ? 'sent' : 'received');
-    const label = direction === 'sent' ? 'Sent' : 'Received';
     return {
       role: msg.isOutgoing ? 'assistant' : 'user',
-      content: `${label}: ${msg.text}`
+      content: msg.text // Clean message text without direction labels
     };
   });
   
-  console.log(`[Backend] Processing ${messages.length} messages (FULL HISTORY) with direction labels (Received/Sent)`);
+  console.log(`[Backend] Processing ${messages.length} messages (FULL HISTORY)`);
+  console.log(`[Backend] Conversation flow: ${messages.map(m => m.isOutgoing ? 'Sent' : 'Received').join(' → ')}`);
 
   // Determine if we should generate a CTA
   const shouldGenerateCTA = requestCTA && 
@@ -133,11 +132,13 @@ Rules:
 - Do NOT introduce unrelated topics or random activities
 - When you are replying to a message, you have to reply as a woman.
 - Do NOT mention Instagram/Snapchat unless explicitly asked OR a CTA is requested
+- CRITICAL: Do NOT include "Sent:" or "Received:" prefixes in your reply - generate clean message text only
 
 IMPORTANT - Conversation Context:
-- Messages labeled "Received:" are messages FROM the other person TO you
-- Messages labeled "Sent:" are messages FROM you TO the other person
-- Use the FULL conversation history to understand context and generate natural, contextually appropriate replies`;
+- Messages with role "user" are messages FROM the other person TO you (you received them)
+- Messages with role "assistant" are messages FROM you TO the other person (you sent them)
+- Use the FULL conversation history to understand context and generate natural, contextually appropriate replies
+- Your reply will be sent as-is, so generate ONLY the message text without any prefixes or labels`;
   if (partnerName && typeof partnerName === 'string' && partnerName.trim()) {
     const name = partnerName.trim();
     systemPrompt += `\n\nCRITICAL - Name: The other person's display name is "${name}". You MUST use this exact name when greeting or addressing them. Never use a different name (e.g. do not say Jason if their name is Frank).`;
@@ -183,6 +184,9 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
     });
 
     let reply = completion.choices[0]?.message?.content?.trim() || '';
+    
+    // Clean up reply: Remove any "Sent:" or "Received:" prefixes that AI might have added
+    reply = reply.replace(/^(Sent|Received):\s*/i, '').trim();
     
     // Determine if this is a CTA (Instagram or Snapchat only)
     // Check if reply contains CTA keywords - if it does, ALWAYS apply invisible mode
