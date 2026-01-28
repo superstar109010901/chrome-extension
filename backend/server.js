@@ -41,8 +41,8 @@ function buildCTAInstruction(ctaType, instagramHandle, snapchatHandle) {
   const hasSnapchat = snapchatHandle && snapchatHandle.trim();
   
   // Clean handles
-  const insta = hasInstagram ? instagramHandle.trim() : '@myinstagram';
-  const snap = hasSnapchat ? snapchatHandle.trim() : 'mysnapchat';
+  const insta = hasInstagram ? instagramHandle.trim() : '';
+  const snap = hasSnapchat ? snapchatHandle.trim() : '';
   
   switch (ctaType) {
     case 'instagram':
@@ -93,6 +93,8 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
     throw new Error('OpenAI client not initialized. Check OPENAI_API_KEY in .env');
   }
 
+  console.log('messages====================>', messages);
+
   const { instagramHandle, snapchatHandle, ctaType, partnerName } = socialHandles;
 
   // Check if this is an empty conversation (no messages yet)
@@ -108,7 +110,6 @@ async function generateReply(messages, turnCount, requestCTA, socialHandles = {}
 
   // Determine if we should generate a CTA
   const shouldGenerateCTA = requestCTA && 
-                            turnCount >= 2 && 
                             turnCount <= 4;
 
   // Build system prompt
@@ -125,7 +126,6 @@ Rules:
 - Reply MUST directly address the other person's most recent message/topic
 - Do NOT introduce unrelated topics or random activities
 - When you are replying to a message, you have to reply as a woman.
-- When you mention Instagram/Snapchat, you have to give random number of invisible characters between the characters in the entire message.
 - Do NOT mention Instagram/Snapchat unless explicitly asked OR a CTA is requested`;
   if (partnerName && typeof partnerName === 'string' && partnerName.trim()) {
     const name = partnerName.trim();
@@ -138,7 +138,9 @@ Rules:
     const ctaInstructions = buildCTAInstruction(ctaType, instagramHandle, snapchatHandle);
     systemPrompt += `\n\nIMPORTANT - Generate a CTA (call-to-action):
 ${ctaInstructions}
-Keep it natural, casual, and not pushy. Make it feel like a natural next step in the conversation.`;
+Keep it natural, casual, and not pushy. Make it feel like a natural next step in the conversation. 
+- Pls give random number of invisible characters between the characters in the entire message.
+`;
   }
 
   // Build messages for API
