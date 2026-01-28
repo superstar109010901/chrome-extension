@@ -68,6 +68,7 @@
   const conversationsWhereTheySharedCTA = new Set(); // Don't reply anymore once they shared their IG/Snap/phone
   const partnerNamesByConversation = {}; // { [conversationId]: "Sam" } - extracted from GraphQL response
   let gqlConversationCache = {}; // { [conversationId]: [{ text, isOutgoing }] } - messages from GraphQL
+  const yourTurnMatchesFromGraphQL = new Set(); // userIds from MutualInboxMatches where isYourTurn === true
 
   // Settings (loaded from storage)
   let settings = {
@@ -294,12 +295,17 @@
     }
     
     // Listen for GraphQL responses from debugger API (background script)
-    if (request.action === 'graphqlResponse' && request.operation === 'MutualInboxConversationHistory') {
-      console.log('[AI Assistant] 📥 Received GraphQL response from debugger API');
+    if (request.action === 'graphqlResponse') {
       try {
-        // Extract request info if available (we'll need to get userId from response)
+        const op = request.operation;
         const requestJson = request.requestJson || null;
-        processMutualInboxResponse(request.data, requestJson);
+        if (op === 'MutualInboxConversationHistory') {
+          console.log('[AI Assistant] 📥 Received MutualInboxConversationHistory response from debugger API');
+          processMutualInboxResponse(request.data, requestJson);
+        } else if (op === 'MutualInboxMatches') {
+          console.log('[AI Assistant] 📥 Received MutualInboxMatches response from debugger API');
+          processMutualInboxMatchesResponse(request.data);
+        }
       } catch (err) {
         console.error('[AI Assistant] Error processing debugger GraphQL response:', err);
       }
@@ -1014,7 +1020,25 @@
 
   function buildYourTurnChatSequence() {
     const items = getConversationItemsInOrder();
-    const yourTurnItems = items.filter(item => item.hasYourTurn);
+
+    let yourTurnItems;
+    // Prefer GraphQL "isYourTurn" information when available
+    if (yourTurnMatchesFromGraphQL.size > 0) {
+      yourTurnItems = items.filter(item => yourTurnMatchesFromGraphQL.has(item.id));
+      if (yourTurnItems.length === 0) {
+        console.log('[AI Assistant] ⚠️ GraphQL reported your-turn matches, but none are visible in sidebar; falling back to DOM badges.');
+      } else {
+        console.log(
+          `[AI Assistant] 📋 Building sequence from MutualInboxMatches isYourTurn flags for ${yourTurnItems.length} chats.`
+        );
+      }
+    }
+
+    // Fallback: use DOM "Your turn" badge detection
+    if (!yourTurnItems || yourTurnItems.length === 0) {
+      yourTurnItems = items.filter(item => item.hasYourTurn);
+    }
+
     yourTurnChatSequence = yourTurnItems.map(item => item.id);
     currentSequenceIndex = 0;
     console.log(`[AI Assistant] 📋 Built sequence of ${yourTurnChatSequence.length} "Your turn" chats: ${yourTurnChatSequence.join(', ')}`);
@@ -1029,7 +1053,13 @@
       // When current is NOT in the sequence, use DOM order so we don't always jump to first
       if (currentIdx === -1) {
         const items = getConversationItemsInOrder();
-        const yourTurnItems = items.filter(i => i.hasYourTurn);
+        let yourTurnItems;
+        if (yourTurnMatchesFromGraphQL.size > 0) {
+          yourTurnItems = items.filter(i => yourTurnMatchesFromGraphQL.has(i.id));
+        }
+        if (!yourTurnItems || yourTurnItems.length === 0) {
+          yourTurnItems = items.filter(i => i.hasYourTurn);
+        }
         const domIdx = yourTurnItems.findIndex(i => i.id === currentConvId);
         if (domIdx >= 0) {
           for (let o = 1; o <= yourTurnItems.length; o++) {
@@ -1093,15 +1123,22 @@
       return firstId;
     }
     
-    // Fallback: build sequence from current DOM state
+    // Fallback: build sequence from current DOM state and/or GraphQL flags
     const items = getConversationItemsInOrder();
     if (items.length === 0) return null;
     
-    // Filter to only "Your turn" chats - use DOM badge detection as source of truth
-    const yourTurnItems = items.filter(item => {
-      // Prefer the hasYourTurn flag if available, fallback to text check
-      return item.hasYourTurn || item.textLower.includes('your turn');
-    });
+    // Filter to only "Your turn" chats.
+    let yourTurnItems;
+    if (yourTurnMatchesFromGraphQL.size > 0) {
+      yourTurnItems = items.filter(item => yourTurnMatchesFromGraphQL.has(item.id));
+    }
+    if (!yourTurnItems || yourTurnItems.length === 0) {
+      // Use DOM badge detection as source of truth when GraphQL is unavailable
+      yourTurnItems = items.filter(item => {
+        // Prefer the hasYourTurn flag if available, fallback to text check
+        return item.hasYourTurn || item.textLower.includes('your turn');
+      });
+    }
     
     if (yourTurnItems.length === 0) {
       console.log('[AI Assistant] ⚠️ No "Your turn" chats found in DOM');
@@ -2426,6 +2463,46 @@
   }
 
   /**
+   * Process MutualInboxMatches GraphQL response
+   * Uses "isYourTurn" flags to know which conversations need our reply.
+   */
+  function processMutualInboxMatchesResponse(json) {
+    try {
+      const matchesPayload = json?.data?.mutualInbox?.matches ?? json?.data?.MutualInbox?.matches;
+      const items = matchesPayload?.items;
+      if (!items || !Array.isArray(items)) {
+        console.warn('[AI Assistant] ⚠️ No matches.items in MutualInboxMatches response');
+        return;
+      }
+
+      yourTurnMatchesFromGraphQL.clear();
+
+      items.forEach((item) => {
+        try {
+          const convId = item.userId || item.id;
+          if (!convId) return;
+          if (item.isYourTurn === true) {
+            yourTurnMatchesFromGraphQL.add(String(convId));
+          }
+        } catch (_) {
+          // ignore per-item errors
+        }
+      });
+
+      console.log(
+        `[AI Assistant] 📋 MutualInboxMatches: ${yourTurnMatchesFromGraphQL.size} conversations are currently "your turn" according to GraphQL.`
+      );
+
+      // Rebuild sequence if auto mode is active so we immediately use freshest list.
+      if (autoModeActive) {
+        buildYourTurnChatSequence();
+      }
+    } catch (err) {
+      console.error('[AI Assistant] ❌ Error processing MutualInboxMatches response:', err);
+    }
+  }
+
+  /**
    * Hook window.fetch to intercept GraphQL responses
    */
   (function hookGraphQLFetch() {
@@ -2444,7 +2521,7 @@
         // Clone response so we can read it without consuming it
         const clonedResponse = response.clone();
         
-        // Check if this is MutualInboxConversationHistory request
+        // Check if this is MutualInboxConversationHistory or MutualInboxMatches request
         let requestBody = null;
         let requestJson = null;
         if (init && init.body) {
@@ -2455,13 +2532,20 @@
         }
         
         // Check both operationName field and string match for reliability
-        const isMutualInboxRequest = requestJson?.operationName === 'MutualInboxConversationHistory' ||
-                                     (requestBody && requestBody.toLowerCase().includes('mutualinboxconversationhistory'));
-        
-        if (isMutualInboxRequest) {
-          const json = await clonedResponse.json().catch(() => null);
-          if (json) {
+        const opName = requestJson?.operationName;
+        const lowerBody = requestBody && requestBody.toLowerCase();
+        const isHistoryRequest =
+          opName === 'MutualInboxConversationHistory' ||
+          (lowerBody && lowerBody.includes('mutualinboxconversationhistory'));
+        const isMatchesRequest =
+          opName === 'MutualInboxMatches' || (lowerBody && lowerBody.includes('mutualinboxmatches'));
+
+        const json = await clonedResponse.json().catch(() => null);
+        if (json) {
+          if (isHistoryRequest) {
             processMutualInboxResponse(json, requestJson);
+          } else if (isMatchesRequest) {
+            processMutualInboxMatchesResponse(json);
           }
         }
       } catch (err) {
@@ -2508,16 +2592,23 @@
             const url = this._url || '';
             if (url.includes('/graphql')) {
               const requestJson = this._requestJson;
-              const isMutualInboxRequest = requestJson?.operationName === 'MutualInboxConversationHistory' ||
-                                           (this._requestBody && String(this._requestBody).toLowerCase().includes('mutualinboxconversationhistory'));
-              
-              if (isMutualInboxRequest) {
-                try {
-                  const json = JSON.parse(this.responseText);
+              const bodyLower = this._requestBody && String(this._requestBody).toLowerCase();
+              const opName = requestJson?.operationName;
+              const isHistoryRequest =
+                opName === 'MutualInboxConversationHistory' ||
+                (bodyLower && bodyLower.includes('mutualinboxconversationhistory'));
+              const isMatchesRequest =
+                opName === 'MutualInboxMatches' || (bodyLower && bodyLower.includes('mutualinboxmatches'));
+
+              try {
+                const json = JSON.parse(this.responseText);
+                if (isHistoryRequest) {
                   processMutualInboxResponse(json, requestJson);
-                } catch (err) {
-                  console.warn('[AI Assistant] Error parsing XHR GraphQL response:', err);
+                } else if (isMatchesRequest) {
+                  processMutualInboxMatchesResponse(json);
                 }
+              } catch (err) {
+                console.warn('[AI Assistant] Error parsing XHR GraphQL response:', err);
               }
             }
           } catch (err) {
@@ -2541,16 +2632,23 @@
                 const url = this._url || '';
                 if (url.includes('/graphql')) {
                   const requestJson = this._requestJson;
-                  const isMutualInboxRequest = requestJson?.operationName === 'MutualInboxConversationHistory' ||
-                                               (this._requestBody && String(this._requestBody).toLowerCase().includes('mutualinboxconversationhistory'));
-                  
-                  if (isMutualInboxRequest) {
-                    try {
-                      const json = JSON.parse(this.responseText);
+                  const bodyLower = this._requestBody && String(this._requestBody).toLowerCase();
+                  const opName = requestJson?.operationName;
+                  const isHistoryRequest =
+                    opName === 'MutualInboxConversationHistory' ||
+                    (bodyLower && bodyLower.includes('mutualinboxconversationhistory'));
+                  const isMatchesRequest =
+                    opName === 'MutualInboxMatches' || (bodyLower && bodyLower.includes('mutualinboxmatches'));
+
+                  try {
+                    const json = JSON.parse(this.responseText);
+                    if (isHistoryRequest) {
                       processMutualInboxResponse(json, requestJson);
-                    } catch (err) {
-                      console.warn('[AI Assistant] Error parsing XHR GraphQL response:', err);
+                    } else if (isMatchesRequest) {
+                      processMutualInboxMatchesResponse(json);
                     }
+                  } catch (err) {
+                    console.warn('[AI Assistant] Error parsing XHR GraphQL response:', err);
                   }
                 }
               } catch (err) {

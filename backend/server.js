@@ -160,6 +160,21 @@ Conversation context:
 
   const lastIncoming = [...messages].reverse().find(m => !m.isOutgoing)?.text?.trim();
 
+  // Help the model avoid repeating itself by explicitly showing recent
+  // assistant messages and forbidding reusing them.
+  const recentAssistantMessages = messages
+    .filter(m => m.isOutgoing && m.text)
+    .map(m => m.text.trim())
+    .filter(Boolean)
+    .slice(-3);
+
+  if (recentAssistantMessages.length > 0) {
+    const bullets = recentAssistantMessages
+      .map(t => `- "${t.substring(0, 80)}"${t.length > 80 ? '...' : ''}`)
+      .join('\n');
+    systemPrompt += `\n\nRecent replies you ALREADY used in this conversation:\n${bullets}\nYou MUST NOT reuse these sentences or very similar wording. Always generate a fresh reply with different phrasing, while staying consistent with the same meaning and context.`;
+  }
+
   if (shouldGenerateCTA) {
     const ctaInstructions = buildCTAInstruction(ctaType, instagramHandle, snapchatHandle);
     systemPrompt += `\n\nIMPORTANT - Generate a CTA (call-to-action):
