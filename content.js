@@ -101,6 +101,11 @@
   let swipeSessionId = 0;
   let isSwiping = false;
 
+  // High-level mode rotation (between Discover swipe and Matches chat)
+  let modeRotationIntervalId = null;
+  let currentWorkMode = null; // 'chat' | 'swipe' | null
+  let nextModeSwitchAtMs = 0;
+
   /**
    * Get random number between min and max
    */
@@ -440,6 +445,172 @@
   }
 
   /**
+   * Try to detect if we're on a Matches/chat page.
+   * (We already have isMessagesPage(), but this helper is used for rotation.)
+   */
+  function isMatchesPage() {
+    return isMessagesPage();
+  }
+
+  /**
+   * Try to navigate to the Discover page by clicking the site's own navigation.
+   * Fallback: set window.location to /home.
+   */
+  function goToDiscoverPage() {
+    try {
+      // Prefer a link or button with visible text "Discover"
+      const candidates = queryAll('a, button, [role="button"]');
+      for (const el of candidates) {
+        const text = ((el.textContent || '') + '').trim().toLowerCase();
+        if (text === 'discover') {
+          el.click();
+          console.log('[AI Assistant] [Rotate] Navigating to Discover via nav button.');
+          return;
+        }
+      }
+
+      // Fallback: any link pointing to /home
+      for (const el of candidates) {
+        try {
+          const href = el.getAttribute && el.getAttribute('href');
+          if (href && href.toLowerCase().includes('/home')) {
+            el.click();
+            console.log('[AI Assistant] [Rotate] Navigating to Discover via /home link.');
+            return;
+          }
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.warn('[AI Assistant] [Rotate] Error clicking Discover nav, falling back to direct URL:', err);
+    }
+
+    try {
+      window.location.href = 'https://www.match.com/home';
+      console.log('[AI Assistant] [Rotate] Navigating to Discover via direct URL.');
+    } catch (_) {}
+  }
+
+  /**
+   * Try to navigate to the Matches page (where conversations live).
+   */
+  function goToMatchesPage() {
+    try {
+      const candidates = queryAll('a, button, [role="button"]');
+      for (const el of candidates) {
+        const text = ((el.textContent || '') + '').trim().toLowerCase();
+        if (text === 'matches' || text.includes('messages')) {
+          el.click();
+          console.log('[AI Assistant] [Rotate] Navigating to Matches via nav button.');
+          return;
+        }
+      }
+
+      for (const el of candidates) {
+        try {
+          const href = el.getAttribute && el.getAttribute('href');
+          if (href && href.toLowerCase().includes('/matches')) {
+            el.click();
+            console.log('[AI Assistant] [Rotate] Navigating to Matches via /matches link.');
+            return;
+          }
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.warn('[AI Assistant] [Rotate] Error clicking Matches nav, falling back to direct URL:', err);
+    }
+
+    try {
+      window.location.href = 'https://www.match.com/matches';
+      console.log('[AI Assistant] [Rotate] Navigating to Matches via direct URL.');
+    } catch (_) {}
+  }
+
+  /**
+   * Start/stop high-level rotation between Discover swipe and Matches chat.
+   * This only runs when BOTH auto chat and swipe are enabled.
+   */
+  function updateModeRotation() {
+    // Clear existing interval if any
+    if (modeRotationIntervalId) {
+      clearInterval(modeRotationIntervalId);
+      modeRotationIntervalId = null;
+    }
+
+    // Only rotate when both features are enabled
+    if (!settings.autoMode || !settings.swipeEnabled) {
+      currentWorkMode = null;
+      nextModeSwitchAtMs = 0;
+      console.log('[AI Assistant] [Rotate] Mode rotation disabled (requires auto chat + swipe both ON).');
+      return;
+    }
+
+    // Helper to schedule next switch within 2–5 minutes
+    const scheduleNextSwitch = () => {
+      const minMs = 2 * 60 * 1000;
+      const maxMs = 5 * 60 * 1000;
+      const delta = randomBetween(minMs, maxMs);
+      nextModeSwitchAtMs = Date.now() + delta;
+      console.log(
+        `[AI Assistant] [Rotate] Next mode switch (${currentWorkMode}) scheduled in ~${Math.round(
+          delta / 60000
+        )} minute(s).`
+      );
+    };
+
+    // Initialize currentWorkMode from current page
+    if (isDiscoverPage()) {
+      currentWorkMode = 'swipe';
+    } else if (isMatchesPage()) {
+      currentWorkMode = 'chat';
+    } else {
+      currentWorkMode = null;
+    }
+
+    scheduleNextSwitch();
+
+    modeRotationIntervalId = setInterval(() => {
+      try {
+        if (!settings.autoMode || !settings.swipeEnabled) {
+          // Safety: turn off rotation if either was disabled while running
+          clearInterval(modeRotationIntervalId);
+          modeRotationIntervalId = null;
+          currentWorkMode = null;
+          nextModeSwitchAtMs = 0;
+          console.log('[AI Assistant] [Rotate] Stopping mode rotation (settings changed).');
+          return;
+        }
+
+        const now = Date.now();
+        // Re-detect current page to keep state honest
+        if (isDiscoverPage()) {
+          currentWorkMode = 'swipe';
+        } else if (isMatchesPage()) {
+          currentWorkMode = 'chat';
+        }
+
+        if (!nextModeSwitchAtMs || now < nextModeSwitchAtMs) {
+          return;
+        }
+
+        // Time to switch modes
+        if (currentWorkMode === 'swipe') {
+          console.log('[AI Assistant] [Rotate] Time to switch: Discover → Matches (chat).');
+          goToMatchesPage();
+          currentWorkMode = 'chat';
+        } else {
+          console.log('[AI Assistant] [Rotate] Time to switch: Matches → Discover (swipe).');
+          goToDiscoverPage();
+          currentWorkMode = 'swipe';
+        }
+
+        scheduleNextSwitch();
+      } catch (err) {
+        console.error('[AI Assistant] [Rotate] Error during rotation tick:', err);
+      }
+    }, 15000); // check every 15 seconds
+  }
+
+  /**
    * Utility to choose a visible button by text (case-insensitive)
    */
   function findButtonByText(text, options = {}) {
@@ -677,12 +848,14 @@
     );
     swipeIntervalId = setInterval(() => {
       try {
-        // Each tick, re-randomize within the configured range by adding a timeout
         performSwipeTick(sessionAtStart);
       } catch (err) {
         console.error('[AI Assistant] [Swipe] Error in interval handler:', err);
       }
     }, intervalMs);
+
+    // Refresh rotation whenever swipe mode changes
+    updateModeRotation();
   }
 
   /**
@@ -1971,6 +2144,9 @@
         console.log('[AI Assistant] Auto mode deactivated - not on messages page');
       }
     }
+
+    // Whenever auto/chat mode configuration changes, also refresh rotation logic
+    updateModeRotation();
   }
 
   /**
@@ -2163,6 +2339,9 @@
 
     // Swipe mode only applies on Discover (/home)
     updateSwipeMode();
+
+    // Ensure rotation timer reflects latest settings + current page
+    updateModeRotation();
   }
 
   /**

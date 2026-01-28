@@ -336,6 +336,42 @@ const DEFAULT_SETTINGS = {
 };
 
 /**
+ * Normalize incoming/settings objects against defaults.
+ * Also handles legacy fields (e.g. old single swipeIntervalSeconds).
+ */
+const normalizeSettings = (src = {}) => {
+  // Backward-compat: if old single swipeIntervalSeconds exists, map it into min/max
+  let swipeIntervalSecondsMin = src.swipeIntervalSecondsMin;
+  let swipeIntervalSecondsMax = src.swipeIntervalSecondsMax;
+  if ((swipeIntervalSecondsMin == null || swipeIntervalSecondsMax == null) && src.swipeIntervalSeconds != null) {
+    const base = Number(src.swipeIntervalSeconds) || DEFAULT_SETTINGS.swipeIntervalSecondsMin;
+    swipeIntervalSecondsMin = swipeIntervalSecondsMin ?? Math.max(2, base - 2);
+    swipeIntervalSecondsMax = swipeIntervalSecondsMax ?? Math.min(60, base + 2);
+  }
+
+  return {
+    autoMode: src.autoMode ?? DEFAULT_SETTINGS.autoMode,
+    autoSend: src.autoSend ?? DEFAULT_SETTINGS.autoSend,
+    replyDelayMin: src.replyDelayMin ?? DEFAULT_SETTINGS.replyDelayMin,
+    replyDelayMax: src.replyDelayMax ?? DEFAULT_SETTINGS.replyDelayMax,
+    chatSwitchDelay: src.chatSwitchDelay ?? DEFAULT_SETTINGS.chatSwitchDelay,
+    randomBreakMode: src.randomBreakMode ?? DEFAULT_SETTINGS.randomBreakMode,
+    breakDurationMin: src.breakDurationMin ?? DEFAULT_SETTINGS.breakDurationMin,
+    breakDurationMax: src.breakDurationMax ?? DEFAULT_SETTINGS.breakDurationMax,
+    breakIntervalMin: src.breakIntervalMin ?? DEFAULT_SETTINGS.breakIntervalMin,
+    breakIntervalMax: src.breakIntervalMax ?? DEFAULT_SETTINGS.breakIntervalMax,
+    instagramHandle: src.instagramHandle ?? DEFAULT_SETTINGS.instagramHandle,
+    snapchatHandle: src.snapchatHandle ?? DEFAULT_SETTINGS.snapchatHandle,
+    ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType,
+    ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
+    swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,
+    swipeLikePercent: src.swipeLikePercent ?? DEFAULT_SETTINGS.swipeLikePercent,
+    swipeIntervalSecondsMin: swipeIntervalSecondsMin ?? DEFAULT_SETTINGS.swipeIntervalSecondsMin,
+    swipeIntervalSecondsMax: swipeIntervalSecondsMax ?? DEFAULT_SETTINGS.swipeIntervalSecondsMax
+  };
+};
+
+/**
  * GET /settings
  * Get extension settings from MongoDB
  * Returns default settings if database is empty
@@ -343,20 +379,22 @@ const DEFAULT_SETTINGS = {
 app.get('/settings', async (req, res) => {
   try {
     const settingsCollection = await getSettingsCollection();
-    
+
     // Get settings (there should only be one document)
-    const settings = await settingsCollection.findOne({});
-    
-    if (!settings) {
+    const settingsDoc = await settingsCollection.findOne({});
+
+    if (!settingsDoc) {
       // Database is empty, return default settings
       console.log('📋 No settings found in database, returning defaults');
       return res.json(DEFAULT_SETTINGS);
     }
-    
-    // Remove MongoDB _id field and return settings
-    const { _id, ...settingsData } = settings;
+
+    // Remove MongoDB _id field, then normalize to ensure all fields (including new swipe ones) exist
+    const { _id, ...rawSettings } = settingsDoc;
+    const settingsData = normalizeSettings(rawSettings);
+
     res.json(settingsData);
-    console.log('💾 Settings fetched from MongoDB:', settingsData);
+    console.log('💾 Settings fetched from MongoDB (normalized):', settingsData);
   } catch (error) {
     console.error('Error getting settings:', error);
     res.status(500).json({ 
@@ -375,27 +413,6 @@ app.post('/settings', async (req, res) => {
   try {
     const settingsCollection = await getSettingsCollection();
     const newSettings = req.body;
-    // Normalize incoming settings against defaults
-    const normalizeSettings = (src = {}) => ({
-      autoMode: src.autoMode ?? DEFAULT_SETTINGS.autoMode,
-      autoSend: src.autoSend ?? DEFAULT_SETTINGS.autoSend,
-      replyDelayMin: src.replyDelayMin ?? DEFAULT_SETTINGS.replyDelayMin,
-      replyDelayMax: src.replyDelayMax ?? DEFAULT_SETTINGS.replyDelayMax,
-      chatSwitchDelay: src.chatSwitchDelay ?? DEFAULT_SETTINGS.chatSwitchDelay,
-      randomBreakMode: src.randomBreakMode ?? DEFAULT_SETTINGS.randomBreakMode,
-      breakDurationMin: src.breakDurationMin ?? DEFAULT_SETTINGS.breakDurationMin,
-      breakDurationMax: src.breakDurationMax ?? DEFAULT_SETTINGS.breakDurationMax,
-      breakIntervalMin: src.breakIntervalMin ?? DEFAULT_SETTINGS.breakIntervalMin,
-      breakIntervalMax: src.breakIntervalMax ?? DEFAULT_SETTINGS.breakIntervalMax,
-      instagramHandle: src.instagramHandle ?? DEFAULT_SETTINGS.instagramHandle,
-      snapchatHandle: src.snapchatHandle ?? DEFAULT_SETTINGS.snapchatHandle,
-      ctaType: src.ctaType ?? DEFAULT_SETTINGS.ctaType,
-      ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
-      swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,
-      swipeLikePercent: src.swipeLikePercent ?? DEFAULT_SETTINGS.swipeLikePercent,
-      swipeIntervalSecondsMin: src.swipeIntervalSecondsMin ?? DEFAULT_SETTINGS.swipeIntervalSecondsMin,
-      swipeIntervalSecondsMax: src.swipeIntervalSecondsMax ?? DEFAULT_SETTINGS.swipeIntervalSecondsMax
-    });
 
     const settings = normalizeSettings(newSettings);
 
