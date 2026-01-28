@@ -168,11 +168,18 @@ Conversation context:
     .filter(Boolean)
     .slice(-3);
 
+  let recentAssistantNormalized = [];
   if (recentAssistantMessages.length > 0) {
     const bullets = recentAssistantMessages
       .map(t => `- "${t.substring(0, 80)}"${t.length > 80 ? '...' : ''}`)
       .join('\n');
     systemPrompt += `\n\nRecent replies you ALREADY used in this conversation:\n${bullets}\nYou MUST NOT reuse these sentences or very similar wording. Always generate a fresh reply with different phrasing, while staying consistent with the same meaning and context.`;
+    recentAssistantNormalized = recentAssistantMessages.map((t) =>
+      t
+        .toLowerCase()
+        .replace(/[\s\p{P}]+/gu, ' ')
+        .trim()
+    );
   }
 
   if (shouldGenerateCTA) {
@@ -196,16 +203,24 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
     userPrompt = `Generate a short, casual reply that directly responds to their last message: "${lastIncoming || ''}"`;
   }
 
-  const messagesForAPI = [
+  const baseMessagesForAPI = [
     { role: 'system', content: systemPrompt },
     ...conversationHistory,
     { role: 'user', content: userPrompt }
   ];
 
+  // Helper to normalize reply text for comparison
+  const normalizeText = (text) =>
+    (text || '')
+      .toLowerCase()
+      .replace(/[\s\p{P}]+/gu, ' ')
+      .trim();
+
   try {
+    // First attempt
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-      messages: messagesForAPI,
+      messages: baseMessagesForAPI,
       max_tokens: 60,
       temperature: 0.6,
       // Encourage the model to avoid repeating the same wording
@@ -217,6 +232,41 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
     
     // Clean up reply: Remove any "Sent:" or "Received:" prefixes that AI might have added
     reply = reply.replace(/^(Sent|Received):\s*/i, '').trim();
+
+    // If reply is effectively the same as a recent assistant message,
+    // ask the model once more to rewrite it with different wording.
+    const normalizedReply = normalizeText(reply);
+    if (
+      normalizedReply &&
+      recentAssistantNormalized.length > 0 &&
+      recentAssistantNormalized.includes(normalizedReply)
+    ) {
+      console.log(
+        '[Backend] Detected duplicate-style reply compared to recent assistant messages. Requesting a rewritten variant.'
+      );
+      const dedupSystemPrompt =
+        systemPrompt +
+        '\n\nYour last attempt repeated wording you already used. Generate a NEW reply that keeps the same intent but uses clearly different phrasing. Do NOT reuse any of the sentences listed above or close variants.';
+      const dedupMessagesForAPI = [
+        { role: 'system', content: dedupSystemPrompt },
+        ...conversationHistory,
+        { role: 'user', content: userPrompt }
+      ];
+
+      const completion2 = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+        messages: dedupMessagesForAPI,
+        max_tokens: 60,
+        temperature: 0.8,
+        frequency_penalty: 1.0,
+        presence_penalty: 0.4
+      });
+
+      const second = completion2.choices[0]?.message?.content?.trim() || '';
+      if (second) {
+        reply = second.replace(/^(Sent|Received):\s*/i, '').trim();
+      }
+    }
     
     // Mark as CTA strictly when we intentionally requested one.
     // The content script decides WHEN to ask for a CTA based on the
