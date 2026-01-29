@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const ctaAfterMessagesEl = document.getElementById('ctaAfterMessages');
   const ctaEnabledEl = document.getElementById('ctaEnabled');
   const ctaInvisibleCharsEl = document.getElementById('ctaInvisibleChars');
+  const unmatchCtaEnabledEl = document.getElementById('unmatchCtaEnabled');
   const openaiApiKeyEl = document.getElementById('openaiApiKey');
   const removeOpenaiApiKeyEl = document.getElementById('removeOpenaiApiKey');
   const saveBtnEl = document.getElementById('saveBtn');
@@ -80,6 +81,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ctaEnabled: true,
     // Custom invisible characters for CTA obfuscation (blank = default)
     ctaInvisibleChars: '',
+    // Unmatch mode: auto-unmatch chats where IG/Snap was shared
+    unmatchCtaEnabled: false,
     // OpenAI API key (stored in DB)
     openaiApiKey: '',
     // Swipe settings
@@ -129,6 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctaAfterMessagesEl.value = DEFAULT_SETTINGS.ctaAfterMessages ?? 3;
       if (ctaEnabledEl) ctaEnabledEl.checked = DEFAULT_SETTINGS.ctaEnabled ?? true;
       if (ctaInvisibleCharsEl) ctaInvisibleCharsEl.value = DEFAULT_SETTINGS.ctaInvisibleChars ?? '';
+      if (unmatchCtaEnabledEl) unmatchCtaEnabledEl.checked = DEFAULT_SETTINGS.unmatchCtaEnabled ?? false;
       // OpenAI key is stored in a separate collection; do not load actual key into UI.
       openaiApiKeyEl.value = '';
       if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
@@ -176,6 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
       if (ctaEnabledEl) ctaEnabledEl.checked = settings.ctaEnabled ?? true;
       if (ctaInvisibleCharsEl) ctaInvisibleCharsEl.value = settings.ctaInvisibleChars ?? '';
+      if (unmatchCtaEnabledEl) unmatchCtaEnabledEl.checked = settings.unmatchCtaEnabled ?? false;
       openaiApiKeyEl.value = '';
       if (removeOpenaiApiKeyEl) removeOpenaiApiKeyEl.checked = false;
       try {
@@ -217,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctaAfterMessages: parseInt(ctaAfterMessagesEl.value, 10),
       ctaEnabled: ctaEnabledEl ? !!ctaEnabledEl.checked : true,
       ctaInvisibleChars: ctaInvisibleCharsEl ? String(ctaInvisibleCharsEl.value || '') : '',
+      unmatchCtaEnabled: unmatchCtaEnabledEl ? !!unmatchCtaEnabledEl.checked : false,
       swipeEnabled: swipeEnabledEl.checked,
       swipeLikePercent: parseInt(swipeLikePercentEl.value, 10),
       swipeIntervalSecondsMin: parseInt(swipeIntervalSecondsMinEl.value, 10),

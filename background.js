@@ -264,6 +264,52 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // async response
   }
 
+  // Start a break that closes the current Match tab and reopens it after the break
+  if (request.action === 'startBreakAndCloseTab') {
+    (async () => {
+      try {
+        const tabId = sender.tab && sender.tab.id;
+        const resumeUrl = request.resumeUrl;
+        const breakEndTime = request.breakEndTime;
+        const startedAt = request.startedAt || Date.now();
+
+        if (!tabId || !resumeUrl || !breakEndTime) {
+          throw new Error('Missing tabId, resumeUrl, or breakEndTime for startBreakAndCloseTab');
+        }
+
+        // Persist resume info so we can reopen later
+        await chrome.storage.local.set({
+          breakResume: {
+            resumeUrl,
+            breakEndTime,
+            startedAt
+          }
+        });
+
+        // Clear any previous resume alarm, then schedule a new one
+        await chrome.alarms.clear('matchAiResumeAfterBreak');
+        chrome.alarms.create('matchAiResumeAfterBreak', {
+          when: breakEndTime
+        });
+
+        // Close the current Match tab
+        try {
+          await chrome.tabs.remove(tabId);
+          console.log(`[Background] ☕ Closed Match tab ${tabId} for break; will reopen around ${new Date(breakEndTime).toLocaleTimeString()}`);
+        } catch (e) {
+          console.warn('[Background] Failed to close tab for break:', e);
+        }
+
+        sendResponse({ ok: true });
+      } catch (err) {
+        console.error('[Background] Error in startBreakAndCloseTab:', err);
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    })();
+
+    return true; // async response
+  }
+
   // Proxy: save settings to backend (MongoDB)
   if (request.action === 'saveSettings') {
     (async () => {
@@ -299,7 +345,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-// Optional: Clean up old storage data periodically
+// Handle alarms:
+// - cleanupStorage: periodic cleanup of old data
+// - matchAiResumeAfterBreak: reopen Match tab after break
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'cleanupStorage') {
     // Clean up conversation data older than 30 days
@@ -318,6 +366,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (keysToDelete.length > 0) {
         chrome.storage.local.remove(keysToDelete);
       }
+    });
+    return;
+  }
+
+  if (alarm.name === 'matchAiResumeAfterBreak') {
+    chrome.storage.local.get('breakResume', (items) => {
+      const info = items.breakResume;
+      if (!info || !info.resumeUrl) {
+        chrome.alarms.clear('matchAiResumeAfterBreak');
+        return;
+      }
+      const { resumeUrl } = info;
+      chrome.tabs.create({ url: resumeUrl, active: true }, () => {
+        console.log('[Background] ☕ Break finished – reopened Match tab to resume auto mode.');
+      });
+      chrome.storage.local.remove('breakResume');
+      chrome.alarms.clear('matchAiResumeAfterBreak');
     });
   }
 });

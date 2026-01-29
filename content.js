@@ -94,6 +94,8 @@
     ctaEnabled: true,
     // Custom invisible characters for CTA obfuscation (blank = default)
     ctaInvisibleChars: '',
+    // Unmatch mode: auto-unmatch chats where IG/Snap was shared
+    unmatchCtaEnabled: false,
     // Swipe settings
     swipeEnabled: false,
     swipeLikePercent: 50,
@@ -101,8 +103,53 @@
     swipeIntervalSecondsMax: 8
   };
 
+  /**
+   * Normalize settings coming from DB/popup (types + bounds).
+   * This prevents NaN/strings from breaking delay logic (setTimeout with NaN becomes ~0ms).
+   */
+  function normalizeSettings(input) {
+    const out = { ...input };
+    // Numbers
+    out.replyDelayMin = Number(out.replyDelayMin);
+    out.replyDelayMax = Number(out.replyDelayMax);
+    out.chatSwitchDelay = Number(out.chatSwitchDelay);
+
+    if (!Number.isFinite(out.replyDelayMin)) out.replyDelayMin = 3;
+    if (!Number.isFinite(out.replyDelayMax)) out.replyDelayMax = 8;
+    if (!Number.isFinite(out.chatSwitchDelay)) out.chatSwitchDelay = 30;
+
+    // Bounds (seconds)
+    out.replyDelayMin = Math.max(1, Math.min(30, out.replyDelayMin));
+    out.replyDelayMax = Math.max(2, Math.min(60, out.replyDelayMax));
+    if (out.replyDelayMax < out.replyDelayMin) out.replyDelayMax = Math.min(60, out.replyDelayMin + 3);
+
+    out.chatSwitchDelay = Math.max(5, Math.min(300, out.chatSwitchDelay));
+
+    // Booleans
+    out.autoMode = !!out.autoMode;
+    out.autoSend = out.autoSend !== false;
+    out.randomBreakMode = !!out.randomBreakMode;
+
+    // CTA
+    out.ctaEnabled = out.ctaEnabled !== false;
+    out.ctaInvisibleChars = typeof out.ctaInvisibleChars === 'string' ? out.ctaInvisibleChars : '';
+    out.unmatchCtaEnabled = !!out.unmatchCtaEnabled;
+
+    // Swipe numeric bounds are normalized in updateSwipeMode, but keep types sane
+    out.swipeEnabled = !!out.swipeEnabled;
+    out.swipeLikePercent = Number(out.swipeLikePercent);
+    if (!Number.isFinite(out.swipeLikePercent)) out.swipeLikePercent = 50;
+    out.swipeLikePercent = Math.max(0, Math.min(100, out.swipeLikePercent));
+    out.swipeIntervalSecondsMin = Number(out.swipeIntervalSecondsMin);
+    out.swipeIntervalSecondsMax = Number(out.swipeIntervalSecondsMax);
+    if (!Number.isFinite(out.swipeIntervalSecondsMin)) out.swipeIntervalSecondsMin = 4;
+    if (!Number.isFinite(out.swipeIntervalSecondsMax)) out.swipeIntervalSecondsMax = 8;
+
+    return out;
+  }
+
   // Swipe state
-  let swipeIntervalId = null;
+  let swipeIntervalId = null; // legacy name (now used as timeout id)
   let swipeSessionId = 0;
   let isSwiping = false;
 
@@ -148,16 +195,40 @@
     
     console.log(`[AI Assistant] ☕ Taking a break for ${Math.round(breakDuration / 60000)} minutes`);
     
+    const startedAt = Date.now();
     // Save break state to storage (so popup can show it)
     await chrome.storage.local.set({
       breakState: {
         isOnBreak: true,
         breakEndTime: breakEndTime,
-        startedAt: Date.now()
+        startedAt
       }
     });
     
-    // Update button
+    // Notify background so it can close this Match tab and reopen after break
+    try {
+      chrome.runtime.sendMessage(
+        {
+          action: 'startBreakAndCloseTab',
+          breakEndTime,
+          startedAt,
+          resumeUrl: window.location.href
+        },
+        () => {
+          // Ignore response errors; background might not handle this on older versions
+          const err = chrome.runtime.lastError;
+          if (err) {
+            console.warn('[AI Assistant] Background break-close notification error:', err.message || String(err));
+          } else {
+            console.log('[AI Assistant] Informed background about break; tab may be closed during break.');
+          }
+        }
+      );
+    } catch (err) {
+      console.warn('[AI Assistant] Failed to notify background about break:', err);
+    }
+    
+    // Update button (until tab is closed)
     updateButtonForBreak();
   }
 
@@ -267,7 +338,7 @@
       console.log('[AI Assistant] Raw settings from DB:', apiSettings);
 
       // Merge API settings with defaults to ensure all fields exist
-      settings = { ...settings, ...apiSettings };
+      settings = normalizeSettings({ ...settings, ...apiSettings });
       console.log('[AI Assistant] Effective settings after merge:', settings);
 
       await loadBreakState();
@@ -291,7 +362,7 @@
     if (request.action === 'settingsUpdated') {
       console.log('[AI Assistant] 📥 Received settings update from popup:', request.settings);
       // Update settings from the message
-      settings = { ...settings, ...request.settings };
+      settings = normalizeSettings({ ...settings, ...request.settings });
       updateAutoMode();
       updateSwipeMode();
       sendResponse({ success: true });
@@ -440,6 +511,47 @@
     if (strongPatterns.some(re => re.test(allText))) return true;
     if (hasInstagram || hasSnapchat) return true;
 
+    return false;
+  }
+
+  /**
+   * Try to unmatch the current conversation when CTA has been shared.
+   * This is best-effort and relies on finding an \"Unmatch\" button in the UI.
+   */
+  function clickFirstUnmatchButton() {
+    try {
+      const candidates = queryAll('button, [role=\"button\"], a, div');
+      for (const el of candidates) {
+        const text = (el.textContent || el.value || '').trim().toLowerCase();
+        if (!text) continue;
+        if (text.includes('unmatch')) {
+          el.click();
+          console.log('[AI Assistant] ⚠️ Clicked \"Unmatch\" for current conversation.');
+          return true;
+        }
+      }
+    } catch (err) {
+      console.error('[AI Assistant] Error while searching for Unmatch button:', err);
+    }
+    console.log('[AI Assistant] ⚠️ Could not find an \"Unmatch\" button for current conversation.');
+    return false;
+  }
+
+  async function unmatchCurrentConversationIfEnabled(convId) {
+    if (!settings.unmatchCtaEnabled) return false;
+    if (!isMatchesPage()) return false;
+    const id = convId || getConversationId();
+    if (!id) return false;
+    console.log(`[AI Assistant] 🔥 Unmatch mode ON – attempting to unmatch conversation ${id} due to CTA.`);
+    const clicked = clickFirstUnmatchButton();
+    if (clicked) {
+      conversationsWhereTheySharedCTA.add(id);
+      // Give the UI a moment to complete the unmatch action
+      try {
+        await new Promise(r => setTimeout(r, 1500));
+      } catch (_) {}
+      return true;
+    }
     return false;
   }
 
@@ -859,7 +971,7 @@
     swipeSessionId++;
 
     if (swipeIntervalId) {
-      clearInterval(swipeIntervalId);
+      clearTimeout(swipeIntervalId);
       swipeIntervalId = null;
     }
 
@@ -877,23 +989,40 @@
     const maxSec = Number(settings.swipeIntervalSecondsMax) || minSec + 2;
     const safeMinSec = Math.max(2, Math.min(60, minSec));
     const safeMaxSec = Math.max(safeMinSec, Math.min(60, maxSec));
-    const initialIntervalSec = randomBetween(
+    const sessionAtStart = swipeSessionId;
+
+    const pickDelayMs = () => {
+      const sec = randomBetween(
       Math.round(safeMinSec),
       Math.round(safeMaxSec)
-    );
-    const intervalMs = initialIntervalSec * 1000;
+      );
+      return sec * 1000;
+    };
 
-    const sessionAtStart = swipeSessionId;
     console.log(
       `[AI Assistant] [Swipe] Activating auto-swipe on Discover – random delay ${safeMinSec}-${safeMaxSec}s between swipes, like ~${settings.swipeLikePercent}% of profiles.`
     );
-    swipeIntervalId = setInterval(() => {
-      try {
-        performSwipeTick(sessionAtStart);
-      } catch (err) {
-        console.error('[AI Assistant] [Swipe] Error in interval handler:', err);
-      }
-    }, intervalMs);
+
+    const scheduleNext = () => {
+      if (sessionAtStart !== swipeSessionId) return;
+      if (!settings.swipeEnabled) return;
+      if (!isDiscoverPage()) return;
+
+      const delayMs = pickDelayMs();
+      console.log(`[AI Assistant] [Swipe] Next swipe in ${Math.round(delayMs / 1000)}s`);
+      swipeIntervalId = setTimeout(async () => {
+        try {
+          await performSwipeTick(sessionAtStart);
+        } catch (err) {
+          console.error('[AI Assistant] [Swipe] Error in swipe loop:', err);
+        } finally {
+          scheduleNext();
+        }
+      }, delayMs);
+    };
+
+    // Start the randomized loop
+    scheduleNext();
 
     // Refresh rotation whenever swipe mode changes
     updateModeRotation();
@@ -1226,20 +1355,48 @@
 
   function autoSwitchToNextChat(currentConvId) {
     const now = Date.now();
+    const requiredDelayMs = (settings.chatSwitchDelay || 30) * 1000;
+    
+    // CRITICAL: Enforce chat switch delay BEFORE switching
+    // Priority 1: Check nextAutoSwitchAt (set by previous switches or other code paths)
+    if (nextAutoSwitchAt > 0 && now < nextAutoSwitchAt) {
+      const remainingSeconds = Math.ceil((nextAutoSwitchAt - now) / 1000);
+      console.log(`[AI Assistant] ⏳ Chat switch blocked by nextAutoSwitchAt. Waiting ${remainingSeconds}s more (${settings.chatSwitchDelay}s delay required)`);
+      return false;
+    }
+    
+    // Priority 2: Check if enough time has passed since last reply OR last switch (whichever is more recent)
+    const mostRecentActionTime = Math.max(lastReplyTime || 0, lastAutoSwitchTime || 0);
+    if (mostRecentActionTime > 0) {
+      const timeSinceMostRecent = now - mostRecentActionTime;
+      if (timeSinceMostRecent < requiredDelayMs) {
+        const remainingSeconds = Math.ceil((requiredDelayMs - timeSinceMostRecent) / 1000);
+        console.log(`[AI Assistant] ⏳ Chat switch delay not met. Waiting ${remainingSeconds}s more (${settings.chatSwitchDelay}s required since last action at ${new Date(mostRecentActionTime).toLocaleTimeString()})`);
+        // Update nextAutoSwitchAt to enforce the delay
+        nextAutoSwitchAt = mostRecentActionTime + requiredDelayMs;
+        return false;
+      }
+    }
+    
     // Use "Your turn" sequence so we advance chat-by-chat, not the first/sidebar order
     const nextId = findNextYourTurnConversationId(currentConvId, true);
-    if (!nextId) return false;
+    if (!nextId) {
+      console.log('[AI Assistant] ⚠️ No next "Your turn" chat found to switch to');
+      return false;
+    }
+    
     const clicked = clickConversationById(nextId);
     if (clicked) {
       lastAutoSwitchTime = now;
       lastAutoSwitchedToConversationId = nextId;
       currentChatEnteredAt = now;
       lastSeenConversationId = nextId;
-      nextAutoSwitchAt = now + Math.max(1500, (settings.chatSwitchDelay || 0) * 1000);
+      // Set nextAutoSwitchAt to prevent immediate re-switching
+      nextAutoSwitchAt = now + requiredDelayMs;
       // After switching, allow immediate reply even if hash doesn't "change"
       allowInitialAutoReply = true;
       lastMessageHash = '';
-      console.log(`[AI Assistant] 🔁 Switched to next chat: ${nextId}`);
+      console.log(`[AI Assistant] 🔁 Switched to next chat: ${nextId} (delay: ${settings.chatSwitchDelay}s enforced, next switch allowed after ${new Date(nextAutoSwitchAt).toLocaleTimeString()})`);
     }
     return clicked;
   }
@@ -1530,9 +1687,15 @@
    * Get random delay within configured range
    */
   function getRandomDelay() {
-    const min = settings.replyDelayMin * 1000;
-    const max = settings.replyDelayMax * 1000;
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+    const minSec = Number(settings.replyDelayMin);
+    const maxSec = Number(settings.replyDelayMax);
+    const safeMinSec = Number.isFinite(minSec) ? Math.max(1, Math.min(60, minSec)) : 3;
+    const safeMaxSec = Number.isFinite(maxSec) ? Math.max(safeMinSec, Math.min(60, maxSec)) : Math.max(safeMinSec, 8);
+    const min = safeMinSec * 1000;
+    const max = safeMaxSec * 1000;
+    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+    if (!Number.isFinite(delay) || delay < 0) return 3000;
+    return delay;
   }
 
   /**
@@ -1579,6 +1742,36 @@
       const convId = getConversationId();
       const hasGraphQLMessages = convId && gqlConversationCache[convId] && gqlConversationCache[convId].length > 0;
       const conversationIdForTurnCount = currentConvId || convId;
+      
+      // CRITICAL: Check GraphQL cache for CTA even if DOM is empty
+      if (hasGraphQLMessages) {
+        const gqlMessages = gqlConversationCache[convId];
+        if (gqlMessages && gqlMessages.length > 0 && chatHistoryContainsAnyCTA(gqlMessages)) {
+          conversationsWhereTheySharedCTA.add(convId);
+          console.log(`[AI Assistant] 🚫 CTA detected in GraphQL cache (empty DOM) – handling according to settings.`);
+          logSkipReason('CTA info exists in GraphQL cache (Instagram/Snapchat) — skipping empty conversation greeting');
+          // If unmatch mode is enabled, attempt to unmatch instead of just skipping.
+          await unmatchCurrentConversationIfEnabled(convId);
+          const nextChatId = findNextYourTurnConversationId(convId, true);
+          if (nextChatId) {
+            autoSwitchToNextChat(convId);
+          }
+          return;
+        }
+      }
+      
+      // Also check if this conversation is already marked as having CTA
+      if (conversationsWhereTheySharedCTA.has(convId)) {
+        console.log(`[AI Assistant] 🚫 Conversation ${convId} already marked as having CTA – handling according to settings.`);
+        logSkipReason('conversation already marked as having CTA');
+        await unmatchCurrentConversationIfEnabled(convId);
+        const nextChatId = findNextYourTurnConversationId(convId, true);
+        if (nextChatId) {
+          autoSwitchToNextChat(convId);
+        }
+        return;
+      }
+      
       const { turnCount } = await getTurnCount(conversationIdForTurnCount);
       if (!hasGraphQLMessages && turnCount === 0) {
         messageInput = messageInput || findMessageInput();
@@ -1612,8 +1805,15 @@
                 await new Promise(r => setTimeout(r, 2500));
                 lastMessageHash = getMessagesHash();
                 repliedToInThisCycle.add(conversationIdForTurnCount);
+                // Note: autoSwitchToNextChat() now enforces chatSwitchDelay internally
+                // It will check if enough time has passed since lastReplyTime before switching
                 const nextId = findNextYourTurnConversationId(conversationIdForTurnCount, true);
-                if (nextId) autoSwitchToNextChat(conversationIdForTurnCount);
+                if (nextId) {
+                  const switched = autoSwitchToNextChat(conversationIdForTurnCount);
+                  if (!switched) {
+                    console.log(`[AI Assistant] ⏳ Chat switch delayed - will retry on next checkAndAutoReply cycle`);
+                  }
+                }
               }
             }
           } catch (e) {
@@ -1655,6 +1855,27 @@
       console.log('[AI Assistant] 🔄 Resetting cycle tracking (5 min elapsed)');
       repliedToInThisCycle.clear();
       lastCycleResetTime = Date.now();
+    }
+    
+    // CRITICAL: Early CTA check - if ANY CTA exists in messages, handle (skip / unmatch) this conversation immediately.
+    // This must happen BEFORE any other reply logic to prevent sending messages.
+    if (messages.length > 0) {
+      if (conversationsWhereTheySharedCTA.has(currentConvId) || chatHistoryContainsAnyCTA(messages)) {
+        if (!conversationsWhereTheySharedCTA.has(currentConvId)) {
+          conversationsWhereTheySharedCTA.add(currentConvId);
+          console.log(`[AI Assistant] 🚫 CTA detected in chat history (early check) – marking conversation.`);
+        } else {
+          console.log(`[AI Assistant] 🚫 Conversation already marked as having CTA (early check).`);
+        }
+        logSkipReason('CTA info exists in chat history (Instagram/Snapchat) — skipping replies for this conversation');
+        // If unmatch mode is enabled, attempt to unmatch this chat instead of only skipping.
+        await unmatchCurrentConversationIfEnabled(currentConvId);
+        const nextChatId = findNextYourTurnConversationId(currentConvId, true);
+        if (nextChatId) {
+          autoSwitchToNextChat(currentConvId);
+        }
+        return;
+      }
     }
     
     // Track chat entry time to support continuous rotation
@@ -1965,6 +2186,24 @@
       // Get conversation context
       currentConversationId = getConversationId();
       const messages = extractMessages();
+      
+      // CRITICAL CHECK: Final CTA check before generating reply (safety net)
+      if (conversationsWhereTheySharedCTA.has(currentConversationId) || (messages.length > 0 && chatHistoryContainsAnyCTA(messages))) {
+        if (!conversationsWhereTheySharedCTA.has(currentConversationId)) {
+          conversationsWhereTheySharedCTA.add(currentConversationId);
+        }
+        console.log(`[AI Assistant] 🚫 CTA detected in final check before reply generation – aborting.`);
+        logSkipReason('CTA info detected in final safety check before reply generation');
+        // If unmatch mode is enabled, attempt to unmatch here as well.
+        await unmatchCurrentConversationIfEnabled(currentConversationId);
+        isProcessingAuto = false;
+        restoreButtonState();
+        const nextChat = findNextYourTurnConversationId(currentConversationId, true);
+        if (nextChat) {
+          autoSwitchToNextChat(currentConversationId);
+        }
+        return;
+      }
       
       // CRITICAL CHECK: Before generating, verify there's an incoming message to reply to
       if (messages.length > 0) {

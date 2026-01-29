@@ -178,16 +178,19 @@ Overall style:
 - Match the other person's energy and topic; stay on the same subject.
 - Avoid explicit sexual content, roleplay, or describing explicit body details.
 - Do not talk about sending photos or videos.
+- Sound like a real person having a natural conversation, not a bot asking interview questions.
 
 Conversation rules:
 - Always directly answer or react to his latest message first.
-- You can ask simple follow‑up questions to keep the chat going.
+- AVOID asking questions unless they are directly relevant to what he just said. Random questions like "how's your day?" or "what are you up to?" make you sound like a bot. Instead, make statements, share reactions, or respond to his topic.
+- If you must ask a question, it should ONLY be a natural follow-up to something specific he mentioned (e.g., if he says "I'm going hiking", you could say "that sounds fun, where are you going?"). Never ask generic questions out of nowhere.
 - Do not be clingy or desperate; keep a light, playful tone.
 - AVOID repetition: do NOT reuse the same opening line or sentence you already used earlier in this conversation.
 - Vary greetings and wording across different replies in the same chat.
 - IMPORTANT: After the first message in a conversation, do NOT open replies with generic greetings like "hey", "hi", "hello", or "hey [name]". Only greet once at the very start; afterwards, respond naturally to what he said.
 - Use his name only occasionally (for emphasis), not in every message.
 - Do NOT invent facts about yourself that conflict with the prior messages.
+- Sound natural and human - respond to what he says, don't interrogate him with questions.
 
 CTA (moving off the app):
 - Only talk about Instagram or Snapchat when a CTA is explicitly requested by the system (requestCTA=true), or when he clearly asks for your social media.
@@ -253,7 +256,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
   } else if (shouldGenerateCTA) {
     userPrompt = 'This is the last chatting history. Based on this, please make a natural short response that:\n1. First replies to what he just said (respond naturally to his latest message)\n2. Then transitions with the exact CTA phrase provided in the system instructions\nDo NOT start with a greeting like "hey" or "hi"; respond directly to his message, then add the transition.';
   } else {
-    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response. Do NOT start with a greeting like "hey" or "hi"; respond directly to what he just said.';
+    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response. Do NOT start with a greeting like "hey" or "hi"; respond directly to what he just said. IMPORTANT: Do NOT ask random questions. Only respond/react to what he said. Make statements or share reactions, not questions.';
   }
 
   const baseMessagesForAPI = [
@@ -479,6 +482,8 @@ const DEFAULT_SETTINGS = {
   ctaAfterMessages: 3,
   // Custom invisible characters for CTA obfuscation (blank = default)
   ctaInvisibleChars: '',
+  // Unmatch mode: automatically unmatch chats where IG/Snap was shared
+  unmatchCtaEnabled: false,
   // OpenAI API key (stored in DB; used in preference to env)
   openaiApiKey: '',
   // Swipe settings
@@ -523,6 +528,7 @@ const normalizeSettings = (src = {}) => {
     ctaEnabled: src.ctaEnabled ?? DEFAULT_SETTINGS.ctaEnabled,
     ctaAfterMessages: src.ctaAfterMessages ?? DEFAULT_SETTINGS.ctaAfterMessages,
     ctaInvisibleChars: (typeof src.ctaInvisibleChars === 'string' ? src.ctaInvisibleChars : DEFAULT_SETTINGS.ctaInvisibleChars),
+    unmatchCtaEnabled: src.unmatchCtaEnabled ?? DEFAULT_SETTINGS.unmatchCtaEnabled,
     // Accept both camelCase and snake_case field names from clients/DB.
     openaiApiKey: openaiApiKeyCandidate ?? DEFAULT_SETTINGS.openaiApiKey,
     swipeEnabled: src.swipeEnabled ?? DEFAULT_SETTINGS.swipeEnabled,
