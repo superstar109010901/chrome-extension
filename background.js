@@ -268,13 +268,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'startBreakAndCloseTab') {
     (async () => {
       try {
-        const tabId = sender.tab && sender.tab.id;
+        let tabId = sender.tab && sender.tab.id;
         const resumeUrl = request.resumeUrl;
         const breakEndTime = request.breakEndTime;
         const startedAt = request.startedAt || Date.now();
 
-        if (!tabId || !resumeUrl || !breakEndTime) {
-          throw new Error('Missing tabId, resumeUrl, or breakEndTime for startBreakAndCloseTab');
+        if (!resumeUrl || !breakEndTime) {
+          throw new Error('Missing resumeUrl or breakEndTime for startBreakAndCloseTab');
+        }
+
+        // Fallback: if sender.tab is missing (rare), find an active Match.com tab
+        if (!tabId) {
+          const tabs = await chrome.tabs.query({ url: '*://*.match.com/*', active: true, currentWindow: true });
+          if (tabs && tabs[0] && tabs[0].id != null) {
+            tabId = tabs[0].id;
+          }
+        }
+
+        if (!tabId) {
+          console.warn('[Background] startBreakAndCloseTab: could not determine tabId, will still schedule resume alarm.');
         }
 
         // Persist resume info so we can reopen later
@@ -292,12 +304,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           when: breakEndTime
         });
 
-        // Close the current Match tab
-        try {
-          await chrome.tabs.remove(tabId);
-          console.log(`[Background] ☕ Closed Match tab ${tabId} for break; will reopen around ${new Date(breakEndTime).toLocaleTimeString()}`);
-        } catch (e) {
-          console.warn('[Background] Failed to close tab for break:', e);
+        // Close the current Match tab (if we could resolve a tabId)
+        if (tabId) {
+          try {
+            await chrome.tabs.remove(tabId);
+            console.log(`[Background] ☕ Closed Match tab ${tabId} for break; will reopen around ${new Date(breakEndTime).toLocaleTimeString()}`);
+          } catch (e) {
+            console.warn('[Background] Failed to close tab for break:', e);
+          }
+        } else {
+          console.warn('[Background] No tabId available for closing; relying on content-script fallback navigation.');
         }
 
         sendResponse({ ok: true });
@@ -345,6 +361,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// Helper: handle resuming after a break (used by alarm + startup)
+function handleResumeAfterBreak(triggerSource) {
+  chrome.storage.local.get('breakResume', (items) => {
+    const info = items.breakResume;
+    if (!info || !info.resumeUrl || !info.breakEndTime) {
+      chrome.alarms.clear('matchAiResumeAfterBreak');
+      return;
+    }
+    const { resumeUrl, breakEndTime } = info;
+    const now = Date.now();
+
+    // If break not finished yet, (re)schedule alarm and exit
+    if (now < breakEndTime) {
+      chrome.alarms.create('matchAiResumeAfterBreak', { when: breakEndTime });
+      return;
+    }
+
+    // Open a new Match tab to resume work
+    chrome.tabs.create({ url: resumeUrl, active: true }, () => {
+      console.log(`[Background] ☕ Break finished (${triggerSource}) – reopened Match tab to resume auto mode.`);
+    });
+    chrome.storage.local.remove('breakResume');
+    chrome.alarms.clear('matchAiResumeAfterBreak');
+  });
+}
+
 // Handle alarms:
 // - cleanupStorage: periodic cleanup of old data
 // - matchAiResumeAfterBreak: reopen Match tab after break
@@ -371,20 +413,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 
   if (alarm.name === 'matchAiResumeAfterBreak') {
-    chrome.storage.local.get('breakResume', (items) => {
-      const info = items.breakResume;
-      if (!info || !info.resumeUrl) {
-        chrome.alarms.clear('matchAiResumeAfterBreak');
-        return;
-      }
-      const { resumeUrl } = info;
-      chrome.tabs.create({ url: resumeUrl, active: true }, () => {
-        console.log('[Background] ☕ Break finished – reopened Match tab to resume auto mode.');
-      });
-      chrome.storage.local.remove('breakResume');
-      chrome.alarms.clear('matchAiResumeAfterBreak');
-    });
+    handleResumeAfterBreak('alarm');
   }
+});
+
+// Also check for an unfinished break when the extension (service worker) starts up.
+chrome.runtime.onStartup.addListener(() => {
+  handleResumeAfterBreak('startup');
 });
 
 // Set up periodic cleanup (runs once per day)

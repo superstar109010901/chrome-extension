@@ -110,6 +110,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const mergedSettings = { ...DEFAULT_SETTINGS, ...settingsFromDB };
       console.log('[Popup] Merged settings (applied as defaults):', mergedSettings);
       Object.assign(DEFAULT_SETTINGS, mergedSettings);
+      // Swipe settings are local-only: never use DB; keep extension defaults for fallback
+      DEFAULT_SETTINGS.swipeEnabled = false;
+      DEFAULT_SETTINGS.swipeLikePercent = 50;
+      DEFAULT_SETTINGS.swipeIntervalSecondsMin = 4;
+      DEFAULT_SETTINGS.swipeIntervalSecondsMax = 8;
 
       // Use the merged/defaults (now seeded from DB) to populate the UI
       autoModeEl.checked = DEFAULT_SETTINGS.autoMode;
@@ -125,10 +130,10 @@ document.addEventListener('DOMContentLoaded', () => {
       breakIntervalMinEl.value = DEFAULT_SETTINGS.breakIntervalMin;
       breakIntervalMaxEl.value = DEFAULT_SETTINGS.breakIntervalMax;
       
-      // Social handles
-      instagramHandleEl.value = DEFAULT_SETTINGS.instagramHandle;
-      snapchatHandleEl.value = DEFAULT_SETTINGS.snapchatHandle;
-      ctaTypeEl.value = DEFAULT_SETTINGS.ctaType;
+      // Social handles (from DB/merged first, then overlay from local storage)
+      instagramHandleEl.value = DEFAULT_SETTINGS.instagramHandle || '';
+      snapchatHandleEl.value = DEFAULT_SETTINGS.snapchatHandle || '';
+      ctaTypeEl.value = DEFAULT_SETTINGS.ctaType || 'instagram';
       ctaAfterMessagesEl.value = DEFAULT_SETTINGS.ctaAfterMessages ?? 3;
       if (ctaEnabledEl) ctaEnabledEl.checked = DEFAULT_SETTINGS.ctaEnabled ?? true;
       if (ctaInvisibleCharsEl) ctaInvisibleCharsEl.value = DEFAULT_SETTINGS.ctaInvisibleChars ?? '';
@@ -146,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
           console.log('[Popup] OpenAI key status from DB:', keyData);
         }
       } catch (_) {}
-      // Swipe
+      // Swipe: local storage only (use DEFAULT_SETTINGS as fallback, then overlay from local)
       swipeEnabledEl.checked = DEFAULT_SETTINGS.swipeEnabled;
       swipeLikePercentEl.value = DEFAULT_SETTINGS.swipeLikePercent ?? 50;
       swipeIntervalSecondsMinEl.value = DEFAULT_SETTINGS.swipeIntervalSecondsMin ?? 4;
@@ -159,6 +164,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (result.breakState?.isOnBreak) {
           updateBreakStatus(result.breakState);
         }
+      });
+      // Social handles + CTA type: stored in local storage only (overwrite form from local)
+      chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType'], (local) => {
+        if (local.instagramHandle != null) instagramHandleEl.value = String(local.instagramHandle);
+        if (local.snapchatHandle != null) snapchatHandleEl.value = String(local.snapchatHandle);
+        if (local.ctaType != null) ctaTypeEl.value = String(local.ctaType);
+      });
+      // Swipe settings: stored in local storage only (overwrite form from local)
+      chrome.storage.local.get(['swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], (local) => {
+        if (local.swipeEnabled != null) swipeEnabledEl.checked = !!local.swipeEnabled;
+        if (local.swipeLikePercent != null) swipeLikePercentEl.value = Number(local.swipeLikePercent);
+        if (local.swipeIntervalSecondsMin != null) swipeIntervalSecondsMinEl.value = Number(local.swipeIntervalSecondsMin);
+        if (local.swipeIntervalSecondsMax != null) swipeIntervalSecondsMaxEl.value = Number(local.swipeIntervalSecondsMax);
       });
     } catch (error) {
       console.error('Error loading settings from API:', error);
@@ -174,9 +192,9 @@ document.addEventListener('DOMContentLoaded', () => {
       breakDurationMaxEl.value = settings.breakDurationMax;
       breakIntervalMinEl.value = settings.breakIntervalMin;
       breakIntervalMaxEl.value = settings.breakIntervalMax;
-      instagramHandleEl.value = settings.instagramHandle;
-      snapchatHandleEl.value = settings.snapchatHandle;
-      ctaTypeEl.value = settings.ctaType;
+      instagramHandleEl.value = settings.instagramHandle || '';
+      snapchatHandleEl.value = settings.snapchatHandle || '';
+      ctaTypeEl.value = settings.ctaType || 'instagram';
       ctaAfterMessagesEl.value = settings.ctaAfterMessages ?? 3;
       if (ctaEnabledEl) ctaEnabledEl.checked = settings.ctaEnabled ?? true;
       if (ctaInvisibleCharsEl) ctaInvisibleCharsEl.value = settings.ctaInvisibleChars ?? '';
@@ -193,6 +211,17 @@ document.addEventListener('DOMContentLoaded', () => {
           console.log('[Popup] OpenAI key status from DB:', keyData);
         }
       } catch (_) {}
+      chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType'], (local) => {
+        if (local.instagramHandle != null) instagramHandleEl.value = String(local.instagramHandle);
+        if (local.snapchatHandle != null) snapchatHandleEl.value = String(local.snapchatHandle);
+        if (local.ctaType != null) ctaTypeEl.value = String(local.ctaType);
+      });
+      chrome.storage.local.get(['swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], (local) => {
+        if (local.swipeEnabled != null) swipeEnabledEl.checked = !!local.swipeEnabled;
+        if (local.swipeLikePercent != null) swipeLikePercentEl.value = Number(local.swipeLikePercent);
+        if (local.swipeIntervalSecondsMin != null) swipeIntervalSecondsMinEl.value = Number(local.swipeIntervalSecondsMin);
+        if (local.swipeIntervalSecondsMax != null) swipeIntervalSecondsMaxEl.value = Number(local.swipeIntervalSecondsMax);
+      });
       swipeEnabledEl.checked = settings.swipeEnabled;
       swipeLikePercentEl.value = settings.swipeLikePercent ?? 50;
       swipeIntervalSecondsMinEl.value = settings.swipeIntervalSecondsMin ?? 4;
@@ -201,8 +230,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Save settings directly to backend API (MongoDB)
+  // Save settings: social handles + CTA type go to local storage only; rest to backend (MongoDB)
   async function saveSettings() {
+    const instagramHandle = instagramHandleEl.value.trim();
+    const snapchatHandle = snapchatHandleEl.value.trim();
+    const ctaType = ctaTypeEl.value;
+
+    // Store Instagram/Snapchat/CTA type in local storage only (not DB)
+    chrome.storage.local.set({ instagramHandle, snapchatHandle, ctaType });
+
+    const swipeEnabled = swipeEnabledEl.checked;
+    const swipeLikePercent = parseInt(swipeLikePercentEl.value, 10);
+    const swipeIntervalSecondsMin = parseInt(swipeIntervalSecondsMinEl.value, 10);
+    const swipeIntervalSecondsMax = parseInt(swipeIntervalSecondsMaxEl.value, 10);
+    // Store swipe settings in local storage only (not DB)
+    chrome.storage.local.set({ swipeEnabled, swipeLikePercent, swipeIntervalSecondsMin, swipeIntervalSecondsMax });
+
     const settings = {
       autoMode: autoModeEl.checked,
       autoSend: autoSendEl.checked,
@@ -215,10 +258,10 @@ document.addEventListener('DOMContentLoaded', () => {
       breakDurationMax: parseInt(breakDurationMaxEl.value) || 15,
       breakIntervalMin: parseInt(breakIntervalMinEl.value) || 45,
       breakIntervalMax: parseInt(breakIntervalMaxEl.value) || 75,
-      // Social handles
-      instagramHandle: instagramHandleEl.value.trim(),
-      snapchatHandle: snapchatHandleEl.value.trim(),
-      ctaType: ctaTypeEl.value,
+      // Social handles + CTA type: not sent to DB (stored in local storage above)
+      instagramHandle,
+      snapchatHandle,
+      ctaType,
       ctaAfterMessages: parseInt(ctaAfterMessagesEl.value, 10),
       ctaEnabled: ctaEnabledEl ? !!ctaEnabledEl.checked : true,
       ctaInvisibleChars: ctaInvisibleCharsEl ? String(ctaInvisibleCharsEl.value || '') : '',
@@ -290,12 +333,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      const payloadForDb = { ...settings };
+      delete payloadForDb.instagramHandle;
+      delete payloadForDb.snapchatHandle;
+      delete payloadForDb.ctaType;
+      delete payloadForDb.swipeEnabled;
+      delete payloadForDb.swipeLikePercent;
+      delete payloadForDb.swipeIntervalSecondsMin;
+      delete payloadForDb.swipeIntervalSecondsMax;
+
       const response = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/settings`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(payloadForDb)
       });
 
       if (!response.ok) {

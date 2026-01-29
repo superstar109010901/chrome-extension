@@ -168,9 +168,15 @@
   /**
    * Schedule the next break time
    */
-  function scheduleNextBreak() {
+  function scheduleNextBreak(force = false) {
     if (!settings.randomBreakMode) {
       nextBreakTime = null;
+      return;
+    }
+
+    // IMPORTANT: Don't refresh/re-roll the break timer if one is already scheduled in the future.
+    // This prevents "break mode resets" when the page navigates to another chat in the SPA.
+    if (!force && nextBreakTime && Number.isFinite(nextBreakTime) && nextBreakTime > Date.now()) {
       return;
     }
     
@@ -179,7 +185,24 @@
     const nextInterval = randomBetween(intervalMin, intervalMax);
     
     nextBreakTime = Date.now() + nextInterval;
-    console.log(`[AI Assistant] Next break scheduled in ${Math.round(nextInterval / 60000)} minutes`);
+    const minutesUntilBreak = Math.round(nextInterval / 60000);
+    const secondsUntilBreak = Math.round((nextInterval % 60000) / 1000);
+    console.log(`[AI Assistant] ☕ Next break scheduled in ${minutesUntilBreak}m ${secondsUntilBreak}s (at ${new Date(nextBreakTime).toLocaleTimeString()})`);
+
+    // Persist nextBreakTime so it survives SPA navigation/reloads
+    try {
+      chrome.storage.local.get('breakState', (res) => {
+        const prev = res.breakState && typeof res.breakState === 'object' ? res.breakState : {};
+        chrome.storage.local.set({
+          breakState: {
+            ...prev,
+            isOnBreak: !!isOnBreak,
+            breakEndTime: breakEndTime || null,
+            nextBreakTime
+          }
+        });
+      });
+    } catch (_) {}
   }
 
   /**
@@ -228,8 +251,23 @@
       console.warn('[AI Assistant] Failed to notify background about break:', err);
     }
     
-    // Update button (until tab is closed)
+    // Update button (until tab is closed or navigated away)
     updateButtonForBreak();
+
+    // Local fallback: if background fails to close the tab, navigate away from Match
+    // after a short delay so the page stops sending Match.com network traffic.
+    try {
+      setTimeout(() => {
+        try {
+          // Attempt to close the window (only works for windows opened by script)
+          window.close();
+        } catch (_) {}
+        // Ensure we leave Match.com page even if window.close is ignored
+        if (window.location && window.location.href && window.location.href.includes('match.com')) {
+          window.location.href = 'about:blank';
+        }
+      }, 1500);
+    } catch (_) {}
   }
 
   /**
@@ -249,8 +287,8 @@
       }
     });
     
-    // Schedule next break
-    scheduleNextBreak();
+    // Schedule next break (force a new schedule after a break completes)
+    scheduleNextBreak(true);
     
     // Update button
     if (floatingButton) {
@@ -293,8 +331,23 @@
     }
     
     // If not on break, check if it's time to take one
-    if (nextBreakTime && now >= nextBreakTime) {
+    if (!nextBreakTime) {
+      // If nextBreakTime is null/undefined, schedule it now (but don't refresh if already set)
+      scheduleNextBreak(false);
+      return;
+    }
+    
+    if (now >= nextBreakTime) {
+      console.log(`[AI Assistant] ☕ Break time reached! (scheduled: ${new Date(nextBreakTime).toLocaleTimeString()}, now: ${new Date(now).toLocaleTimeString()})`);
       await startBreak();
+    } else {
+      // Log occasionally (every ~30 seconds) to show we're checking
+      const timeUntilBreak = nextBreakTime - now;
+      if (timeUntilBreak % 30000 < 5000) { // Log roughly every 30 seconds
+        const minutesLeft = Math.floor(timeUntilBreak / 60000);
+        const secondsLeft = Math.floor((timeUntilBreak % 60000) / 1000);
+        console.log(`[AI Assistant] ☕ Break check: ${minutesLeft}m ${secondsLeft}s until break`);
+      }
     }
   }
 
@@ -315,6 +368,12 @@
         } else {
           // Break has ended while away
           await endBreak();
+        }
+      } else {
+        // Restore next scheduled break time (prevents reset on SPA navigation)
+        const t = result.breakState?.nextBreakTime;
+        if (t && Number.isFinite(t)) {
+          nextBreakTime = t;
         }
       }
     } catch (error) {
@@ -339,15 +398,37 @@
 
       // Merge API settings with defaults to ensure all fields exist
       settings = normalizeSettings({ ...settings, ...apiSettings });
-      console.log('[AI Assistant] Effective settings after merge:', settings);
+
+      // Instagram/Snapchat/CTA type + swipe: stored in local storage only; overlay from chrome.storage.local
+      const local = await new Promise((resolve) => {
+        chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType', 'swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], resolve);
+      });
+      if (local.instagramHandle != null) settings.instagramHandle = String(local.instagramHandle);
+      if (local.snapchatHandle != null) settings.snapchatHandle = String(local.snapchatHandle);
+      if (local.ctaType != null) settings.ctaType = String(local.ctaType);
+      if (local.swipeEnabled != null) settings.swipeEnabled = !!local.swipeEnabled;
+      if (local.swipeLikePercent != null) settings.swipeLikePercent = Number(local.swipeLikePercent);
+      if (local.swipeIntervalSecondsMin != null) settings.swipeIntervalSecondsMin = Number(local.swipeIntervalSecondsMin);
+      if (local.swipeIntervalSecondsMax != null) settings.swipeIntervalSecondsMax = Number(local.swipeIntervalSecondsMax);
+      console.log('[AI Assistant] Effective settings after merge (social + swipe from local storage):', settings);
 
       await loadBreakState();
       updateAutoMode();
-      console.log('[AI Assistant] ✅ Settings loaded from MongoDB');
+      console.log('[AI Assistant] ✅ Settings loaded (DB + local storage)');
     } catch (error) {
       console.error('[AI Assistant] Error loading settings from API:', error);
       // Use default settings if API fails
       console.log('[AI Assistant] ⚠️ Using default settings (API unavailable)');
+      const local = await new Promise((resolve) => {
+        chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType', 'swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], resolve);
+      });
+      if (local.instagramHandle != null) settings.instagramHandle = String(local.instagramHandle);
+      if (local.snapchatHandle != null) settings.snapchatHandle = String(local.snapchatHandle);
+      if (local.ctaType != null) settings.ctaType = String(local.ctaType);
+      if (local.swipeEnabled != null) settings.swipeEnabled = !!local.swipeEnabled;
+      if (local.swipeLikePercent != null) settings.swipeLikePercent = Number(local.swipeLikePercent);
+      if (local.swipeIntervalSecondsMin != null) settings.swipeIntervalSecondsMin = Number(local.swipeIntervalSecondsMin);
+      if (local.swipeIntervalSecondsMax != null) settings.swipeIntervalSecondsMax = Number(local.swipeIntervalSecondsMax);
       await loadBreakState();
       updateAutoMode();
     }
@@ -2375,16 +2456,29 @@
   function updateAutoMode() {
     console.log('[AI Assistant] updateAutoMode called:', { autoMode: settings.autoMode, isMessagesPage: isMessagesPage(), messageInput: !!messageInput });
     
-    // Bump session to cancel any in-flight auto work
-    autoSessionId++;
-    // Clear existing intervals
-    if (autoModeInterval) {
-      clearInterval(autoModeInterval);
-      autoModeInterval = null;
+    const shouldBeActive = !!(settings.autoMode && isMessagesPage());
+    const breakShouldBeActive = shouldBeActive && settings.randomBreakMode && !isOnBreak;
+
+    // Only bump session + reset intervals when turning OFF, or when turning ON from OFF.
+    // This prevents break timers from resetting on every SPA navigation/chat switch.
+    const wasActive = !!autoModeActive;
+    const turningOn = shouldBeActive && !wasActive;
+    const turningOff = !shouldBeActive && wasActive;
+
+    if (turningOn || turningOff) {
+      autoSessionId++;
     }
-    if (breakCheckInterval) {
-      clearInterval(breakCheckInterval);
-      breakCheckInterval = null;
+
+    // Clear intervals only when turning off, or when not supposed to be active
+    if (!shouldBeActive) {
+      if (autoModeInterval) {
+        clearInterval(autoModeInterval);
+        autoModeInterval = null;
+      }
+      if (breakCheckInterval) {
+        clearInterval(breakCheckInterval);
+        breakCheckInterval = null;
+      }
     }
 
     // Update button text and style
@@ -2402,8 +2496,8 @@
       }
     }
 
-    // Start auto mode if enabled
-    if (settings.autoMode && isMessagesPage()) {
+    // Start/keep auto mode if enabled
+    if (shouldBeActive) {
       console.log('[AI Assistant] ✅ Starting auto mode - conditions met');
       const wasAutoActive = autoModeActive; // Only "navigate to first" when turning ON, not when re-applying
       // Initialize message hash to current state (don't reply to existing messages)
@@ -2440,23 +2534,37 @@
         }
       }
       
-      // Start checking for new messages
-      autoModeInterval = setInterval(() => {
-        try {
-          checkAndAutoReply();
-        } catch (err) {
-          console.error('[AI Assistant] ❌ Error in checkAndAutoReply:', err);
-        }
-      }, CONFIG.AUTO_CHECK_INTERVAL);
+      // Start checking for new messages (only create interval once)
+      if (!autoModeInterval) {
+        autoModeInterval = setInterval(() => {
+          try {
+            checkAndAutoReply();
+          } catch (err) {
+            console.error('[AI Assistant] ❌ Error in checkAndAutoReply:', err);
+          }
+        }, CONFIG.AUTO_CHECK_INTERVAL);
+      }
       
       console.log(`[AI Assistant] 🤖 Auto mode ACTIVATED - interval set to ${CONFIG.AUTO_CHECK_INTERVAL}ms`);
       
       // If break mode is enabled, schedule breaks
-      if (settings.randomBreakMode && !isOnBreak) {
-        scheduleNextBreak();
-        // Also run break check periodically
-        breakCheckInterval = setInterval(checkBreakStatus, 30000); // Check every 30 seconds
-        console.log('[AI Assistant] ☕ Break mode enabled');
+      if (breakShouldBeActive) {
+        scheduleNextBreak(false);
+        // Also run break check more frequently (every 5 seconds) to catch break time accurately
+        if (!breakCheckInterval) {
+          breakCheckInterval = setInterval(() => {
+            checkBreakStatus().catch(err => {
+              console.error('[AI Assistant] Error in break check interval:', err);
+            });
+          }, 5000);
+        }
+        console.log('[AI Assistant] ☕ Break mode enabled - break check every 5s');
+      } else {
+        // If breaks are not enabled now, stop break checks but DO NOT clear nextBreakTime (so enabling again resumes schedule)
+        if (breakCheckInterval) {
+          clearInterval(breakCheckInterval);
+          breakCheckInterval = null;
+        }
       }
     } else {
       autoModeActive = false;

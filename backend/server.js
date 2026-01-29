@@ -551,14 +551,24 @@ app.get('/settings', async (req, res) => {
     const settingsDoc = await settingsCollection.findOne({});
 
     if (!settingsDoc) {
-      // Database is empty, return default settings
+      // Database is empty, return default settings (swipe is local-only, strip from response)
+      const defaultsForClient = { ...DEFAULT_SETTINGS };
+      delete defaultsForClient.swipeEnabled;
+      delete defaultsForClient.swipeLikePercent;
+      delete defaultsForClient.swipeIntervalSecondsMin;
+      delete defaultsForClient.swipeIntervalSecondsMax;
       console.log('📋 No settings found in database, returning defaults');
-      return res.json(DEFAULT_SETTINGS);
+      return res.json(defaultsForClient);
     }
 
-    // Remove MongoDB _id field, then normalize to ensure all fields (including new swipe ones) exist
+    // Remove MongoDB _id field, then normalize to ensure all fields exist
     const { _id, ...rawSettings } = settingsDoc;
     const settingsData = normalizeSettings(rawSettings);
+    // Swipe settings are stored in extension local storage only; do not return from API
+    delete settingsData.swipeEnabled;
+    delete settingsData.swipeLikePercent;
+    delete settingsData.swipeIntervalSecondsMin;
+    delete settingsData.swipeIntervalSecondsMax;
 
     res.json(settingsData);
     console.log('💾 Settings fetched from MongoDB (normalized):', settingsData);
@@ -590,6 +600,16 @@ app.post('/settings', async (req, res) => {
     const mergedInput = existingSettings ? { ...existingSettings, ...newSettings } : newSettings;
     const settings = normalizeSettings(mergedInput);
 
+    // Social handles + CTA type + swipe settings: stored in extension local storage only; do not persist to DB
+    const settingsForDb = { ...settings };
+    delete settingsForDb.instagramHandle;
+    delete settingsForDb.snapchatHandle;
+    delete settingsForDb.ctaType;
+    delete settingsForDb.swipeEnabled;
+    delete settingsForDb.swipeLikePercent;
+    delete settingsForDb.swipeIntervalSecondsMin;
+    delete settingsForDb.swipeIntervalSecondsMax;
+
     // Helper: shallow equality between two settings objects
     const settingsEqual = (a, b) => {
       const keys = Object.keys(DEFAULT_SETTINGS);
@@ -604,14 +624,14 @@ app.post('/settings', async (req, res) => {
       return res.json({ success: true, settings: existingSettings });
     }
     
-    // Use upsert to create or update the single settings document
+    // Use upsert to create or update the single settings document (excluding local-only fields)
     await settingsCollection.updateOne(
       {}, // Empty filter means match any document (or none)
-      { $set: settings },
+      { $set: settingsForDb },
       { upsert: true } // Create if doesn't exist
     );
-    
-    console.log('💾 Settings saved to MongoDB');
+
+    console.log('💾 Settings saved to MongoDB (instagram/snapchat/ctaType/swipe are local-only, not stored in DB)');
     res.json({ success: true, settings });
   } catch (error) {
     console.error('Error saving settings:', error);
