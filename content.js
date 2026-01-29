@@ -1773,7 +1773,9 @@
   }
 
   /**
-   * Insert reply text into message input field
+   * Insert reply text into message input field.
+   * Reply is inserted as-is so invisible CTA chars stay in the string: invisible in chat input/history,
+   * but when the user copies and pastes into a text document, the pasted text contains them (visible with "Show non-printing characters").
    */
   function insertReplyIntoInput(reply) {
     if (!messageInput) {

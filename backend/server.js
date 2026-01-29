@@ -337,9 +337,10 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
     if (isCTA) {
       const originalLength = reply.length;
       console.log(`[Backend] ✅ Applying invisible characters to CTA message (original length=${originalLength})`);
-      
-      // Invisible Unicode characters: zero-width space, zero-width non-joiner, zero-width joiner, left-to-right mark, right-to-left mark
-      const defaultInvisibleChars = '\u200B\u200C\u200D\u200E\u200F';
+      // Invisible in chat input and chat history; when user copies and pastes into a text document,
+      // the pasted string contains these chars (visible with "Show non-printing characters" in editors).
+      // Use only zero-width chars that do not render in browsers: ZWSP, ZWNJ, ZWJ, BOM (no LRM/RLM to avoid boxes).
+      const defaultInvisibleChars = '\u200B\u200C\u200D\uFEFF';
       const customChars =
         typeof ctaInvisibleChars === 'string' ? ctaInvisibleChars.trim() : '';
       const invisibleChars = customChars || defaultInvisibleChars;
@@ -370,7 +371,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
       // Count default invisibles OR the custom set (best-effort)
       const invisibleCharCount = customChars
         ? reply.split('').filter((ch) => invisibleChars.includes(ch)).length
-        : (reply.match(/[\u200B\u200C\u200D\u200E\u200F]/g) || []).length;
+        : (reply.match(/[\u200B\u200C\u200D\uFEFF]/g) || []).length;
       if (invisibleCharCount === 0) {
         console.error(`[Backend] ⚠️ WARNING: No invisible characters detected in reply after application!`);
       } else {
