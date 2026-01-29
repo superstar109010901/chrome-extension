@@ -174,7 +174,7 @@ You are helping write short, natural replies for a woman chatting with a man on 
 Overall style:
 - Keep replies short (ideally under 5–10 words).
 - Sound friendly, feminine, relaxed, and confident.
-- Use casual texting language (e.g. "hey", "haha", "lol") but do NOT overdo slang.
+- Use casual chat / texting style and abbreviations where natural: e.g. "hbu" (how about you), "lol", "lmao", "omg", "ngl", "tbh", "idk", "ikr", "haha", "hey", "gonna", "wanna", "kinda", "def", "rn", "ty", "np". Write like real texting, not formal sentences.
 - Match the other person's energy and topic; stay on the same subject.
 - Avoid explicit sexual content, roleplay, or describing explicit body details.
 - Do not talk about sending photos or videos.
@@ -256,7 +256,7 @@ Keep it natural, casual, and not pushy. Make it feel like a natural next step in
   } else if (shouldGenerateCTA) {
     userPrompt = 'This is the last chatting history. Based on this, please make a natural short response that:\n1. First replies to what he just said (respond naturally to his latest message)\n2. Then transitions with the exact CTA phrase provided in the system instructions\nDo NOT start with a greeting like "hey" or "hi"; respond directly to his message, then add the transition.';
   } else {
-    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response. Do NOT start with a greeting like "hey" or "hi"; respond directly to what he just said. IMPORTANT: Do NOT ask random questions. Only respond/react to what he said. Make statements or share reactions, not questions.';
+    userPrompt = 'This is the last chatting history. Based on this, please make a natural short response in casual chat style (use abbreviations like hbu, lol, omg, ngl, tbh, idk where natural). Do NOT start with a greeting like "hey" or "hi"; respond directly to what he just said. IMPORTANT: Do NOT ask random questions. Only respond/react to what he said. Make statements or share reactions, not questions.';
   }
 
   const baseMessagesForAPI = [

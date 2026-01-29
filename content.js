@@ -69,6 +69,7 @@
   const partnerNamesByConversation = {}; // { [conversationId]: "Sam" } - extracted from GraphQL response
   let gqlConversationCache = {}; // { [conversationId]: [{ text, isOutgoing }] } - messages from GraphQL
   const yourTurnMatchesFromGraphQL = new Set(); // userIds from MutualInboxMatches where isYourTurn === true
+  let yourTurnIdsOrderedFromGraphQL = []; // Ordered list of your-turn IDs from GraphQL (real-time source)
 
   // Settings (loaded from storage)
   let settings = {
@@ -531,7 +532,7 @@
    * No DOM extraction.
    */
   function getPartnerDisplayName() {
-    const convId = getConversationId();
+      const convId = getConversationId();
     if (convId && partnerNamesByConversation[convId]) {
       const name = partnerNamesByConversation[convId];
       console.log(`[AI Assistant] 📛 Using partner name from GraphQL: "${name}"`);
@@ -1304,29 +1305,26 @@
   }
 
   function buildYourTurnChatSequence() {
-    const items = getConversationItemsInOrder();
+    const domItems = getConversationItemsInOrder();
 
-    let yourTurnItems;
-    // Prefer GraphQL "isYourTurn" information when available
-    if (yourTurnMatchesFromGraphQL.size > 0) {
-      yourTurnItems = items.filter(item => yourTurnMatchesFromGraphQL.has(item.id));
-      if (yourTurnItems.length === 0) {
-        console.log('[AI Assistant] ⚠️ GraphQL reported your-turn matches, but none are visible in sidebar; falling back to DOM badges.');
-      } else {
-        console.log(
-          `[AI Assistant] 📋 Building sequence from MutualInboxMatches isYourTurn flags for ${yourTurnItems.length} chats.`
-        );
-      }
+    // When GraphQL has your-turn data: use ONLY GraphQL isYourTurn (real-time); never fall back to DOM.
+    if (yourTurnMatchesFromGraphQL.size > 0 && yourTurnIdsOrderedFromGraphQL.length > 0) {
+      // Keep GraphQL order; only include IDs that are visible in sidebar so we can navigate.
+      yourTurnChatSequence = yourTurnIdsOrderedFromGraphQL.filter(id =>
+        domItems.some(item => item.id === id)
+      );
+      currentSequenceIndex = 0;
+      console.log(
+        `[AI Assistant] 📋 Built sequence from GraphQL isYourTurn only (real-time): ${yourTurnChatSequence.length} chats: ${yourTurnChatSequence.join(', ')}`
+      );
+      return yourTurnChatSequence;
     }
 
-    // Fallback: use DOM "Your turn" badge detection
-    if (!yourTurnItems || yourTurnItems.length === 0) {
-      yourTurnItems = items.filter(item => item.hasYourTurn);
-    }
-
+    // No GraphQL data: fall back to DOM "Your turn" badge detection.
+    const yourTurnItems = domItems.filter(item => item.hasYourTurn);
     yourTurnChatSequence = yourTurnItems.map(item => item.id);
     currentSequenceIndex = 0;
-    console.log(`[AI Assistant] 📋 Built sequence of ${yourTurnChatSequence.length} "Your turn" chats: ${yourTurnChatSequence.join(', ')}`);
+    console.log(`[AI Assistant] 📋 Built sequence from DOM badges: ${yourTurnChatSequence.length} "Your turn" chats: ${yourTurnChatSequence.join(', ')}`);
     return yourTurnChatSequence;
   }
 
@@ -1335,17 +1333,17 @@
     if (yourTurnChatSequence.length > 0) {
       const currentIdx = yourTurnChatSequence.indexOf(currentConvId);
 
-      // When current is NOT in the sequence, use DOM order so we don't always jump to first
+      // When current is NOT in the sequence, use GraphQL order (or DOM order when no GraphQL).
       if (currentIdx === -1) {
         const items = getConversationItemsInOrder();
         let yourTurnItems;
         if (yourTurnMatchesFromGraphQL.size > 0) {
           yourTurnItems = items.filter(i => yourTurnMatchesFromGraphQL.has(i.id));
         }
-        if (!yourTurnItems || yourTurnItems.length === 0) {
+        if ((!yourTurnItems || yourTurnItems.length === 0) && yourTurnMatchesFromGraphQL.size === 0) {
           yourTurnItems = items.filter(i => i.hasYourTurn);
         }
-        const domIdx = yourTurnItems.findIndex(i => i.id === currentConvId);
+        const domIdx = yourTurnItems.length > 0 ? yourTurnItems.findIndex(i => i.id === currentConvId) : -1;
         if (domIdx >= 0) {
           for (let o = 1; o <= yourTurnItems.length; o++) {
             const j = (domIdx + o) % yourTurnItems.length;
@@ -1356,10 +1354,14 @@
             return cand;
           }
         }
-        // Current not in DOM "Your turn" list — return first available from sequence (not always [0] if replied)
+        // Current not in list — return first available from sequence (GraphQL-only when GraphQL has data)
         for (let i = 0; i < yourTurnChatSequence.length; i++) {
           const id = yourTurnChatSequence[i];
           if (excludeReplied && repliedToInThisCycle.has(id)) continue;
+          if (yourTurnMatchesFromGraphQL.size > 0) {
+            currentSequenceIndex = i;
+            return id;
+          }
           const item = items.find(it => it.id === id);
           if (item && item.hasYourTurn) {
             currentSequenceIndex = i;
@@ -1411,22 +1413,24 @@
     // Fallback: build sequence from current DOM state and/or GraphQL flags
     const items = getConversationItemsInOrder();
     if (items.length === 0) return null;
-    
-    // Filter to only "Your turn" chats.
+
+    // When GraphQL has your-turn data: only consider GraphQL your-turn chats (real-time); never DOM fallback.
     let yourTurnItems;
     if (yourTurnMatchesFromGraphQL.size > 0) {
       yourTurnItems = items.filter(item => yourTurnMatchesFromGraphQL.has(item.id));
+      if (yourTurnItems.length === 0) {
+        console.log('[AI Assistant] 📋 GraphQL your-turn chats exist but none visible in sidebar; only my-turn chats will be used.');
+        return null;
+      }
     }
     if (!yourTurnItems || yourTurnItems.length === 0) {
-      // Use DOM badge detection as source of truth when GraphQL is unavailable
-      yourTurnItems = items.filter(item => {
-        // Prefer the hasYourTurn flag if available, fallback to text check
-        return item.hasYourTurn || item.textLower.includes('your turn');
-      });
+      yourTurnItems = items.filter(item =>
+        item.hasYourTurn || item.textLower.includes('your turn')
+      );
     }
-    
+
     if (yourTurnItems.length === 0) {
-      console.log('[AI Assistant] ⚠️ No "Your turn" chats found in DOM');
+      console.log('[AI Assistant] ⚠️ No "Your turn" chats found');
       return null;
     }
     
@@ -1583,7 +1587,7 @@
     }
 
     console.log(`[AI Assistant] 📋 No GraphQL cache for conversation – returning []`);
-    return [];
+        return [];
   }
 
   /**
@@ -1831,7 +1835,7 @@
       }
       return;
     }
-    
+
     // Debug: Log that we're running (only occasionally to avoid spam)
     if (Math.random() < 0.01) { // Log ~1% of the time
       console.log('[AI Assistant] 🔄 checkAndAutoReply running...', { session, autoSessionId, autoModeActive });
@@ -1844,7 +1848,24 @@
 
     // Get current conversation ID early so we can run empty-conversation check before requiring messageInput
     const currentConvId = getConversationId();
-    
+
+    // When GraphQL has your-turn data: only reply in "my turn" chats (real-time); skip and switch if not.
+    if (yourTurnMatchesFromGraphQL.size > 0 && currentConvId && !yourTurnMatchesFromGraphQL.has(currentConvId)) {
+      logSkipReason('current chat is not "my turn" per GraphQL – switching to a my-turn chat');
+      const nextId = findNextYourTurnConversationId(currentConvId, true);
+      if (nextId) autoSwitchToNextChat(currentConvId);
+      return;
+    }
+
+    // Once CTA (invisible Instagram/Snap) was sent in this conversation, do not reply anymore – skip and switch.
+    const { ctaSent } = await getTurnCount(currentConvId);
+    if (ctaSent) {
+      logSkipReason('CTA already sent in this conversation – no more messages');
+      const nextId = findNextYourTurnConversationId(currentConvId, true);
+      if (nextId) autoSwitchToNextChat(currentConvId);
+      return;
+    }
+
     // Check break status
     await checkBreakStatus();
     if (!isAutoSessionActive(session)) return;
@@ -2289,7 +2310,7 @@
     lastMessageHash = currentHash;
     allowInitialAutoReply = false;
     lastAttemptedAutoReplyByConversation[currentConvId] = { hash: currentHash, ts: Date.now() };
-
+    
     console.log('[AI Assistant] 🚀 New incoming message detected! Starting auto-reply...');
     isProcessingAuto = true;
 
@@ -2359,6 +2380,16 @@
       
       const { ctaSent } = await getTurnCount(currentConversationId);
       if (!isAutoSessionActive(session)) return;
+      // Once CTA (invisible Instagram/Snap) was sent in this conversation, stop replying here – skip and switch.
+      if (ctaSent) {
+        console.log('[AI Assistant] 🚫 CTA already sent in this conversation – skipping further replies, switching to next chat.');
+        logSkipReason('CTA already sent – no more messages in this chat');
+        isProcessingAuto = false;
+        restoreButtonState();
+        const nextChat = findNextYourTurnConversationId(currentConversationId, true);
+        if (nextChat) autoSwitchToNextChat(currentConversationId);
+        return;
+      }
       const sentCount = messages.filter(m => m.isOutgoing).length;
       console.log('[AI Assistant] Generating reply for', messages.length, 'messages, Sent count from GraphQL:', sentCount);
       
@@ -2503,18 +2534,18 @@
     const turningOff = !shouldBeActive && wasActive;
 
     if (turningOn || turningOff) {
-      autoSessionId++;
+    autoSessionId++;
     }
 
     // Clear intervals only when turning off, or when not supposed to be active
     if (!shouldBeActive) {
-      if (autoModeInterval) {
-        clearInterval(autoModeInterval);
-        autoModeInterval = null;
-      }
-      if (breakCheckInterval) {
-        clearInterval(breakCheckInterval);
-        breakCheckInterval = null;
+    if (autoModeInterval) {
+      clearInterval(autoModeInterval);
+      autoModeInterval = null;
+    }
+    if (breakCheckInterval) {
+      clearInterval(breakCheckInterval);
+      breakCheckInterval = null;
       }
     }
 
@@ -2613,7 +2644,7 @@
         console.log('[AI Assistant] Auto mode deactivated - settings.autoMode is false');
       } else if (!isMessagesPage()) {
         console.log('[AI Assistant] Auto mode deactivated - not on messages page');
-      }
+    }
     }
 
     // Whenever auto/chat mode configuration changes, also refresh rotation logic
@@ -2755,54 +2786,54 @@
 
     // Chat features only apply on messages page
     if (isMessagesPage()) {
-      messageInput = findMessageInput();
+    messageInput = findMessageInput();
+    
+    if (!messageInput) {
+      setTimeout(init, CONFIG.POLL_INTERVAL);
+      return;
+    }
+
+    createFloatingButton();
+    updateAutoMode();
+
+    if (observer) {
+      observer.disconnect();
+    }
+
+    observer = new MutationObserver(() => {
+      // Re-find message input if lost
+      if (!messageInput || !document.body.contains(messageInput)) {
+        messageInput = findMessageInput();
+        if (messageInput && settings.autoMode) {
+          console.log('[AI Assistant] Message input re-found');
+        }
+      }
       
-      if (!messageInput) {
-        setTimeout(init, CONFIG.POLL_INTERVAL);
-        return;
-      }
-
-      createFloatingButton();
-      updateAutoMode();
-
-      if (observer) {
-        observer.disconnect();
-      }
-
-      observer = new MutationObserver(() => {
-        // Re-find message input if lost
-        if (!messageInput || !document.body.contains(messageInput)) {
-          messageInput = findMessageInput();
-          if (messageInput && settings.autoMode) {
-            console.log('[AI Assistant] Message input re-found');
-          }
-        }
+      // Check for conversation change
+      const newConversationId = getConversationId();
+      if (newConversationId !== currentConversationId) {
+        console.log('[AI Assistant] Conversation changed:', newConversationId);
+        currentConversationId = newConversationId;
+        lastMessageHash = ''; // Reset hash for new conversation
+        isProcessingAuto = false; // Reset processing state
         
-        // Check for conversation change
-        const newConversationId = getConversationId();
-        if (newConversationId !== currentConversationId) {
-          console.log('[AI Assistant] Conversation changed:', newConversationId);
-          currentConversationId = newConversationId;
-          lastMessageHash = ''; // Reset hash for new conversation
-          isProcessingAuto = false; // Reset processing state
-          
-          // Note: We keep lastConversationId to detect conversation switches
-          // It will be updated when we actually reply to this new conversation
-          
-          // Re-initialize auto mode for new conversation
-          if (settings.autoMode) {
-            setTimeout(() => {
-              lastMessageHash = getMessagesHash();
-              console.log('[AI Assistant] New conversation hash:', lastMessageHash.substring(0, 50));
-            }, 500);
-          }
+        // Note: We keep lastConversationId to detect conversation switches
+        // It will be updated when we actually reply to this new conversation
+        
+        // Re-initialize auto mode for new conversation
+        if (settings.autoMode) {
+          setTimeout(() => {
+            lastMessageHash = getMessagesHash();
+            console.log('[AI Assistant] New conversation hash:', lastMessageHash.substring(0, 50));
+          }, 500);
         }
-      });
+      }
+    });
 
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
     } else {
       // If not on messages page, ensure auto mode timers are stopped
       updateAutoMode();
@@ -2910,13 +2941,16 @@
       }
 
       yourTurnMatchesFromGraphQL.clear();
+      yourTurnIdsOrderedFromGraphQL = [];
 
       items.forEach((item) => {
         try {
           const convId = item.userId || item.id;
           if (!convId) return;
           if (item.isYourTurn === true) {
-            yourTurnMatchesFromGraphQL.add(String(convId));
+            const idStr = String(convId);
+            yourTurnMatchesFromGraphQL.add(idStr);
+            yourTurnIdsOrderedFromGraphQL.push(idStr);
           }
         } catch (_) {
           // ignore per-item errors
@@ -2924,13 +2958,11 @@
       });
 
       console.log(
-        `[AI Assistant] 📋 MutualInboxMatches: ${yourTurnMatchesFromGraphQL.size} conversations are currently "your turn" according to GraphQL.`
+        `[AI Assistant] 📋 MutualInboxMatches: ${yourTurnMatchesFromGraphQL.size} conversations are currently "your turn" according to GraphQL (real-time).`
       );
 
-      // Rebuild sequence if auto mode is active so we immediately use freshest list.
-      if (autoModeActive) {
-        buildYourTurnChatSequence();
-      }
+      // Rebuild sequence on every GraphQL update so we only go to my-turn chats in real time.
+      buildYourTurnChatSequence();
     } catch (err) {
       console.error('[AI Assistant] ❌ Error processing MutualInboxMatches response:', err);
     }
