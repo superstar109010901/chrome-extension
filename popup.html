@@ -493,6 +493,21 @@
           A random delay within this range will be used between each swipe.
         </div>
       </div>
+
+      <div class="input-group">
+        <div class="input-label">
+          <span>🔢</span> Swipe Count
+        </div>
+        <div class="delay-input">
+          <input type="number" class="input-field" id="swipeCountMin" min="1" max="200" value="5">
+          <span class="delay-unit">to</span>
+          <input type="number" class="input-field" id="swipeCountMax" min="1" max="200" value="20">
+          <span class="delay-unit">swipes per session</span>
+        </div>
+        <div class="toggle-sublabel" style="margin-top: 4px;">
+          When on Discover, the bot will do a random number of swipes in this range, then stop (mode rotation may switch to Matches).
+        </div>
+      </div>
     </div>
   </div>
   

@@ -52,6 +52,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const swipeLikePercentEl = document.getElementById('swipeLikePercent');
   const swipeIntervalSecondsMinEl = document.getElementById('swipeIntervalSecondsMin');
   const swipeIntervalSecondsMaxEl = document.getElementById('swipeIntervalSecondsMax');
+  const swipeCountMinEl = document.getElementById('swipeCountMin');
+  const swipeCountMaxEl = document.getElementById('swipeCountMax');
   const tabs = Array.from(document.querySelectorAll('.tab'));
   const tabContents = {
     chat: document.getElementById('chatTab'),
@@ -89,7 +91,9 @@ document.addEventListener('DOMContentLoaded', () => {
     swipeEnabled: false,
     swipeLikePercent: 50,
     swipeIntervalSecondsMin: 4,
-    swipeIntervalSecondsMax: 8
+    swipeIntervalSecondsMax: 8,
+    swipeCountMin: 5,
+    swipeCountMax: 20
   };
 
   // Load settings directly from backend API (MongoDB)
@@ -115,6 +119,8 @@ document.addEventListener('DOMContentLoaded', () => {
       DEFAULT_SETTINGS.swipeLikePercent = 50;
       DEFAULT_SETTINGS.swipeIntervalSecondsMin = 4;
       DEFAULT_SETTINGS.swipeIntervalSecondsMax = 8;
+      DEFAULT_SETTINGS.swipeCountMin = 5;
+      DEFAULT_SETTINGS.swipeCountMax = 20;
 
       // Use the merged/defaults (now seeded from DB) to populate the UI
       autoModeEl.checked = DEFAULT_SETTINGS.autoMode;
@@ -156,6 +162,8 @@ document.addEventListener('DOMContentLoaded', () => {
       swipeLikePercentEl.value = DEFAULT_SETTINGS.swipeLikePercent ?? 50;
       swipeIntervalSecondsMinEl.value = DEFAULT_SETTINGS.swipeIntervalSecondsMin ?? 4;
       swipeIntervalSecondsMaxEl.value = DEFAULT_SETTINGS.swipeIntervalSecondsMax ?? 8;
+      if (swipeCountMinEl) swipeCountMinEl.value = DEFAULT_SETTINGS.swipeCountMin ?? 5;
+      if (swipeCountMaxEl) swipeCountMaxEl.value = DEFAULT_SETTINGS.swipeCountMax ?? 20;
       
       updateUIVisibility();
       
@@ -172,11 +180,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (local.ctaType != null) ctaTypeEl.value = String(local.ctaType);
       });
       // Swipe settings: stored in local storage only (overwrite form from local)
-      chrome.storage.local.get(['swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], (local) => {
+      chrome.storage.local.get(['swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax', 'swipeCountMin', 'swipeCountMax'], (local) => {
         if (local.swipeEnabled != null) swipeEnabledEl.checked = !!local.swipeEnabled;
         if (local.swipeLikePercent != null) swipeLikePercentEl.value = Number(local.swipeLikePercent);
         if (local.swipeIntervalSecondsMin != null) swipeIntervalSecondsMinEl.value = Number(local.swipeIntervalSecondsMin);
         if (local.swipeIntervalSecondsMax != null) swipeIntervalSecondsMaxEl.value = Number(local.swipeIntervalSecondsMax);
+        if (local.swipeCountMin != null && swipeCountMinEl) swipeCountMinEl.value = Number(local.swipeCountMin);
+        if (local.swipeCountMax != null && swipeCountMaxEl) swipeCountMaxEl.value = Number(local.swipeCountMax);
       });
     } catch (error) {
       console.error('Error loading settings from API:', error);
@@ -216,16 +226,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (local.snapchatHandle != null) snapchatHandleEl.value = String(local.snapchatHandle);
         if (local.ctaType != null) ctaTypeEl.value = String(local.ctaType);
       });
-      chrome.storage.local.get(['swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], (local) => {
+      chrome.storage.local.get(['swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax', 'swipeCountMin', 'swipeCountMax'], (local) => {
         if (local.swipeEnabled != null) swipeEnabledEl.checked = !!local.swipeEnabled;
         if (local.swipeLikePercent != null) swipeLikePercentEl.value = Number(local.swipeLikePercent);
         if (local.swipeIntervalSecondsMin != null) swipeIntervalSecondsMinEl.value = Number(local.swipeIntervalSecondsMin);
         if (local.swipeIntervalSecondsMax != null) swipeIntervalSecondsMaxEl.value = Number(local.swipeIntervalSecondsMax);
+        if (local.swipeCountMin != null && swipeCountMinEl) swipeCountMinEl.value = Number(local.swipeCountMin);
+        if (local.swipeCountMax != null && swipeCountMaxEl) swipeCountMaxEl.value = Number(local.swipeCountMax);
       });
       swipeEnabledEl.checked = settings.swipeEnabled;
       swipeLikePercentEl.value = settings.swipeLikePercent ?? 50;
       swipeIntervalSecondsMinEl.value = settings.swipeIntervalSecondsMin ?? 4;
       swipeIntervalSecondsMaxEl.value = settings.swipeIntervalSecondsMax ?? 8;
+      if (swipeCountMinEl) swipeCountMinEl.value = settings.swipeCountMin ?? 5;
+      if (swipeCountMaxEl) swipeCountMaxEl.value = settings.swipeCountMax ?? 20;
       updateUIVisibility();
     }
   }
@@ -269,7 +283,9 @@ document.addEventListener('DOMContentLoaded', () => {
       swipeEnabled: swipeEnabledEl.checked,
       swipeLikePercent: parseInt(swipeLikePercentEl.value, 10),
       swipeIntervalSecondsMin: parseInt(swipeIntervalSecondsMinEl.value, 10),
-      swipeIntervalSecondsMax: parseInt(swipeIntervalSecondsMaxEl.value, 10)
+      swipeIntervalSecondsMax: parseInt(swipeIntervalSecondsMaxEl.value, 10),
+      swipeCountMin: parseInt(swipeCountMinEl?.value, 10) || 5,
+      swipeCountMax: parseInt(swipeCountMaxEl?.value, 10) || 20
     };
 
     // OpenAI key behavior (separate collection):
@@ -295,6 +311,11 @@ document.addEventListener('DOMContentLoaded', () => {
       settings.swipeIntervalSecondsMax = settings.swipeIntervalSecondsMin + 2;
     }
     if (settings.swipeIntervalSecondsMax > 60) settings.swipeIntervalSecondsMax = 60;
+    if (!Number.isFinite(settings.swipeCountMin)) settings.swipeCountMin = 5;
+    if (!Number.isFinite(settings.swipeCountMax)) settings.swipeCountMax = 20;
+    settings.swipeCountMin = Math.max(1, Math.min(200, settings.swipeCountMin));
+    settings.swipeCountMax = Math.max(1, Math.min(200, settings.swipeCountMax));
+    if (settings.swipeCountMax < settings.swipeCountMin) settings.swipeCountMax = settings.swipeCountMin;
 
     // Validate delay values
     if (settings.replyDelayMin < 1) settings.replyDelayMin = 1;
@@ -341,6 +362,8 @@ document.addEventListener('DOMContentLoaded', () => {
       delete payloadForDb.swipeLikePercent;
       delete payloadForDb.swipeIntervalSecondsMin;
       delete payloadForDb.swipeIntervalSecondsMax;
+      delete payloadForDb.swipeCountMin;
+      delete payloadForDb.swipeCountMax;
 
       const response = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/settings`, {
         method: 'POST',

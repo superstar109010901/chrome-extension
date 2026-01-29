@@ -100,7 +100,9 @@
     swipeEnabled: false,
     swipeLikePercent: 50,
     swipeIntervalSecondsMin: 4,
-    swipeIntervalSecondsMax: 8
+    swipeIntervalSecondsMax: 8,
+    swipeCountMin: 5,
+    swipeCountMax: 20
   };
 
   /**
@@ -144,6 +146,13 @@
     out.swipeIntervalSecondsMax = Number(out.swipeIntervalSecondsMax);
     if (!Number.isFinite(out.swipeIntervalSecondsMin)) out.swipeIntervalSecondsMin = 4;
     if (!Number.isFinite(out.swipeIntervalSecondsMax)) out.swipeIntervalSecondsMax = 8;
+    out.swipeCountMin = Number(out.swipeCountMin);
+    out.swipeCountMax = Number(out.swipeCountMax);
+    if (!Number.isFinite(out.swipeCountMin)) out.swipeCountMin = 5;
+    if (!Number.isFinite(out.swipeCountMax)) out.swipeCountMax = 20;
+    out.swipeCountMin = Math.max(1, Math.min(200, out.swipeCountMin));
+    out.swipeCountMax = Math.max(1, Math.min(200, out.swipeCountMax));
+    if (out.swipeCountMax < out.swipeCountMin) out.swipeCountMax = out.swipeCountMin;
 
     return out;
   }
@@ -401,7 +410,7 @@
 
       // Instagram/Snapchat/CTA type + swipe: stored in local storage only; overlay from chrome.storage.local
       const local = await new Promise((resolve) => {
-        chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType', 'swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], resolve);
+        chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType', 'swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax', 'swipeCountMin', 'swipeCountMax'], resolve);
       });
       if (local.instagramHandle != null) settings.instagramHandle = String(local.instagramHandle);
       if (local.snapchatHandle != null) settings.snapchatHandle = String(local.snapchatHandle);
@@ -420,7 +429,7 @@
       // Use default settings if API fails
       console.log('[AI Assistant] ⚠️ Using default settings (API unavailable)');
       const local = await new Promise((resolve) => {
-        chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType', 'swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax'], resolve);
+        chrome.storage.local.get(['instagramHandle', 'snapchatHandle', 'ctaType', 'swipeEnabled', 'swipeLikePercent', 'swipeIntervalSecondsMin', 'swipeIntervalSecondsMax', 'swipeCountMin', 'swipeCountMax'], resolve);
       });
       if (local.instagramHandle != null) settings.instagramHandle = String(local.instagramHandle);
       if (local.snapchatHandle != null) settings.snapchatHandle = String(local.snapchatHandle);
@@ -429,6 +438,8 @@
       if (local.swipeLikePercent != null) settings.swipeLikePercent = Number(local.swipeLikePercent);
       if (local.swipeIntervalSecondsMin != null) settings.swipeIntervalSecondsMin = Number(local.swipeIntervalSecondsMin);
       if (local.swipeIntervalSecondsMax != null) settings.swipeIntervalSecondsMax = Number(local.swipeIntervalSecondsMax);
+      if (local.swipeCountMin != null) settings.swipeCountMin = Number(local.swipeCountMin);
+      if (local.swipeCountMax != null) settings.swipeCountMax = Number(local.swipeCountMax);
       await loadBreakState();
       updateAutoMode();
     }
@@ -868,84 +879,87 @@
   }
 
   /**
-   * Helper: determine whether a button label represents the normal "Like"
-   * action on Discover (and NOT "Super Like").
+   * Get normalized label for a button (visible text or aria-label).
+   * Collapses whitespace and strips invisible Unicode so " Like \n" and "Like" both become "like".
+   */
+  function getButtonLabel(el) {
+    if (!el) return '';
+    try {
+      let raw = (el.innerText || el.textContent || el.value || '') + '';
+      if (!raw.trim()) raw = (el.getAttribute('aria-label') || el.getAttribute('data-label') || '') + '';
+      raw = raw.replace(/[\u200B-\u200D\uFEFF]/g, ''); // strip zero-width chars
+      return raw.replace(/\s+/g, ' ').trim().toLowerCase();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /**
+   * True only for the normal "Like" button – NOT "Super Like".
    */
   function isNormalLikeText(textLower) {
     if (!textLower) return false;
-    const t = textLower.trim();
+    const t = textLower.replace(/\s+/g, ' ').trim();
     if (!t.includes('like')) return false;
-    if (t.includes('super like')) return false;
+    if (t.includes('super')) return false;
     return true;
   }
 
+  /** Selector for swipe action elements – Match.com may use button, role=button, or anchor. */
+  const SWIPE_BUTTON_SELECTOR = 'button, [role="button"], input[type="button"], input[type="submit"], a';
+
   /**
-   * Specifically find the normal "Like" button on Discover, NOT "Super Like".
-   * We prefer text that is exactly "like", and explicitly ignore any button
-   * whose text includes "super like".
+   * True if the element is the normal Like button (not Super Like).
+   * Match.com: the Like button is a <button> that contains a <span> with exact text "Like".
    */
-  function findPrimaryLikeButton() {
-    const candidates = queryAll('button, [role="button"], input[type="button"], input[type="submit"]');
-    let best = null;
-    for (const el of candidates) {
-      try {
-        const textLower = ((el.textContent || el.value || '') + '').toLowerCase();
-        if (!isNormalLikeText(textLower)) continue;
-        const text = textLower.trim();
-        // Ideal case: text is exactly "like"
-        if (text === 'like') {
-          best = el;
-          break;
-        }
-        // Fallback: any other label that still clearly contains "like"
-        if (!best) {
-          best = el;
-        }
-      } catch (_) {
-        continue;
-      }
+  function isLikeButton(el) {
+    if (!el) return false;
+    const fullLabel = getButtonLabel(el);
+    if (fullLabel.includes('super')) return false;
+    if (fullLabel === 'like') return true;
+    try {
+      const descendants = el.querySelectorAll ? el.querySelectorAll('*') : [];
+      return Array.from(descendants).some(desc => {
+        const t = ((desc.textContent || '') + '').replace(/\s+/g, ' ').trim().toLowerCase();
+        return t === 'like';
+      });
+    } catch (_) {
+      return false;
     }
-    return best;
   }
 
   /**
-   * Try to locate the main swipe action row (Skip / Super Like / Like)
-   * and return the specific Skip and Like buttons from that row.
-   * This avoids accidentally picking some other "Skip" on the page.
+   * Find the normal "Like" button on Discover. Never returns "Super Like".
+   * Match.com: button contains a <span> with exact text "Like"; we find it by that structure.
+   */
+  function findPrimaryLikeButton() {
+    const candidates = queryAll(SWIPE_BUTTON_SELECTOR);
+    for (const el of candidates) {
+      if (isLikeButton(el)) return el;
+    }
+    return null;
+  }
+
+  /**
+   * Locate the main swipe row and return only "Skip" and "Like" buttons.
+   * Never returns "Super Like". Includes anchors so we find the Like button on Match.com.
    */
   function getSwipeRowButtons() {
-    const allButtons = queryAll('button, [role="button"], input[type="button"], input[type="submit"]');
+    const allButtons = queryAll(SWIPE_BUTTON_SELECTOR);
 
-    // Pass 1: Start from the visible "Like" button, walk up to find a sibling "Skip".
+    // Pass 1: Find Like button (by structure: contains <span> with text "Like"), then sibling Skip in same row.
     try {
       for (const btn of allButtons) {
-        const textLower = ((btn.textContent || btn.value || '') + '').toLowerCase();
-        if (!isNormalLikeText(textLower)) continue;
+        if (!isLikeButton(btn)) continue;
 
-        // Walk up a few levels to find a container that also has a Skip button.
         let container = btn.parentElement;
-        for (let depth = 0; depth < 4 && container; depth++) {
-          const rowButtons = Array.from(
-            container.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]')
-          );
+        for (let depth = 0; depth < 6 && container; depth++) {
+          const rowButtons = Array.from(container.querySelectorAll(SWIPE_BUTTON_SELECTOR));
           let likeBtn = null;
           let skipBtn = null;
           for (const rb of rowButtons) {
-            const rbTextLower = ((rb.textContent || rb.value || '') + '').toLowerCase();
-            if (!isNormalLikeText(rbTextLower)) {
-              const trimmed = rbTextLower.trim();
-              if (trimmed === 'skip') {
-                skipBtn = rb;
-              }
-              continue;
-            }
-            const trimmed = rbTextLower.trim();
-            if (trimmed === 'like') {
-              likeBtn = rb;
-            } else if (!likeBtn) {
-              // any other valid like-labeled button
-              likeBtn = rb;
-            }
+            if (getButtonLabel(rb) === 'skip') skipBtn = rb;
+            else if (isLikeButton(rb)) likeBtn = rb;
           }
           if (likeBtn && skipBtn) {
             return { likeButton: likeBtn, skipButton: skipBtn };
@@ -953,56 +967,46 @@
           container = container.parentElement;
         }
       }
-    } catch (_) {
-      // ignore and try fallback strategy
-    }
+    } catch (_) {}
 
-    // Pass 2: Fallback to starting from a Skip button, as before.
+    // Pass 2: Start from Skip, find sibling Like in same row.
     for (const btn of allButtons) {
-      try {
-        const textLower = ((btn.textContent || btn.value || '') + '').toLowerCase();
-        if (!textLower.trim().includes('skip')) continue;
-        const parent = btn.parentElement;
-        if (!parent) continue;
-        const rowButtons = Array.from(
-          parent.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]')
-        );
+      if (getButtonLabel(btn) !== 'skip') continue;
+      let container = btn.parentElement;
+      for (let depth = 0; depth < 6 && container; depth++) {
+        const rowButtons = Array.from(container.querySelectorAll(SWIPE_BUTTON_SELECTOR));
         let likeBtn = null;
         let skipBtn = null;
         for (const rb of rowButtons) {
-          const rbTextLower = ((rb.textContent || rb.value || '') + '').toLowerCase();
-          const trimmed = rbTextLower.trim();
-          if (trimmed === 'skip') {
-            skipBtn = rb;
-            continue;
-          }
-          if (!isNormalLikeText(rbTextLower)) continue;
-          if (!likeBtn || trimmed === 'like') {
-            likeBtn = rb;
-          }
+          if (getButtonLabel(rb) === 'skip') skipBtn = rb;
+          else if (isLikeButton(rb)) likeBtn = rb;
         }
         if (likeBtn && skipBtn) {
           return { likeButton: likeBtn, skipButton: skipBtn };
         }
-      } catch (_) {
-        continue;
+        container = container.parentElement;
       }
     }
 
-    // Final fallback to generic finders (still avoiding Super Like).
-    return {
-      likeButton: findPrimaryLikeButton(),
-      skipButton: findButtonByText('skip', { exact: true })
-    };
+    // Fallback: find Like by label only (never Super Like); Skip by text.
+    const likeBtn = findPrimaryLikeButton();
+    let skipBtn = findButtonByText('skip', { exact: true });
+    if (!skipBtn) {
+      const skipCandidates = queryAll(SWIPE_BUTTON_SELECTOR);
+      for (const el of skipCandidates) {
+        if (getButtonLabel(el) === 'skip') { skipBtn = el; break; }
+      }
+    }
+    return { likeButton: likeBtn, skipButton: skipBtn };
   }
 
   /**
-   * Perform a single swipe decision on Discover page:
-   * - With probability swipeLikePercent%, click "Like"
-   * - Otherwise click "Skip"
-   * After Liking, click "Next profile" or "Skip" if such buttons appear.
+   * Perform a single swipe action on Discover page.
+   * Only clicks "Skip" or "Like" – never "Super Like".
+   * @param {number} sessionIdForCall - session id to validate
+   * @param {'like'|'skip'} action - 'like' = click Like then Next profile; 'skip' = click Skip to pass
    */
-  async function performSwipeTick(sessionIdForCall) {
+  async function performSwipeTick(sessionIdForCall, action) {
     if (!settings.swipeEnabled) return;
     if (!isDiscoverPage()) return;
     if (sessionIdForCall !== swipeSessionId) return;
@@ -1010,33 +1014,46 @@
 
     isSwiping = true;
     try {
-      // Always aim to click LIKE first; never click initial Skip / Super Like.
-      // If Like button is not yet present, just wait for the next tick.
+      let { likeButton, skipButton } = getSwipeRowButtons();
 
-      // IMPORTANT: only use the normal Like button from the main swipe row, never Super Like
-      const { likeButton } = getSwipeRowButtons();
-
-      if (!likeButton) {
-        console.log('[AI Assistant] [Swipe] Like button not found yet – waiting for it to appear.');
-        return;
-      }
-
-      likeButton.click();
-      console.log('[AI Assistant] [Swipe] Clicked Like on current profile.');
-
-      // Wait briefly for any post-like UI (e.g. "Next profile", "Skip") to appear,
-      // then use those ONLY to move to the next profile.
-      await new Promise((r) => setTimeout(r, 1500));
-
-      const nextProfileButton = findButtonByText('next profile', { exact: false });
-      const postLikeSkip = findButtonByText('skip', { exact: false });
-
-      if (nextProfileButton) {
-        nextProfileButton.click();
-        console.log('[AI Assistant] [Swipe] Clicked Next profile after Like.');
-      } else if (postLikeSkip) {
-        postLikeSkip.click();
-        console.log('[AI Assistant] [Swipe] Clicked Skip after Like (no Next profile button).');
+      if (action === 'like') {
+        // Wait for Like button to appear (retry every 1.5s, up to ~15s) instead of skipping the turn
+        const maxWaitMs = 15000;
+        const retryIntervalMs = 1500;
+        let waited = 0;
+        while (!likeButton && waited < maxWaitMs) {
+          if (sessionIdForCall !== swipeSessionId || !settings.swipeEnabled || !isDiscoverPage()) break;
+          console.log('[AI Assistant] [Swipe] Like button not found yet – waiting for it to appear.');
+          await new Promise((r) => setTimeout(r, retryIntervalMs));
+          waited += retryIntervalMs;
+          const row = getSwipeRowButtons();
+          likeButton = row.likeButton;
+        }
+        if (likeButton) {
+          likeButton.click();
+          console.log('[AI Assistant] [Swipe] Clicked Like on current profile.');
+          await new Promise((r) => setTimeout(r, 1500));
+          const nextProfileButton = findButtonByText('next profile', { exact: false });
+          const postLikeSkip = findButtonByText('skip', { exact: false });
+          if (nextProfileButton) {
+            nextProfileButton.click();
+            console.log('[AI Assistant] [Swipe] Clicked Next profile after Like.');
+          } else if (postLikeSkip) {
+            postLikeSkip.click();
+            console.log('[AI Assistant] [Swipe] Clicked Skip after Like (no Next profile button).');
+          }
+        } else {
+          console.log('[AI Assistant] [Swipe] Like button still not found after waiting – skipping this like turn.');
+        }
+      } else {
+        // action === 'skip'
+        if (!skipButton) {
+          console.log('[AI Assistant] [Swipe] Skip button not found yet – waiting for it to appear.');
+          return;
+        }
+        skipButton.click();
+        console.log('[AI Assistant] [Swipe] Clicked Skip on current profile.');
+        await new Promise((r) => setTimeout(r, 800));
       }
     } catch (err) {
       console.error('[AI Assistant] [Swipe] Error during swipe tick:', err);
@@ -1071,6 +1088,22 @@
     const safeMinSec = Math.max(2, Math.min(60, minSec));
     const safeMaxSec = Math.max(safeMinSec, Math.min(60, maxSec));
     const sessionAtStart = swipeSessionId;
+    const minCount = Math.max(1, Math.min(200, Number(settings.swipeCountMin) || 5));
+    const maxCount = Math.max(minCount, Math.min(200, Number(settings.swipeCountMax) || 20));
+    const targetCount = randomBetween(minCount, maxCount);
+    const rawLike = Number(settings.swipeLikePercent);
+    const likePct = Number.isFinite(rawLike) ? Math.max(0, Math.min(100, rawLike)) : 50;
+    const numLikes = Math.round(targetCount * likePct / 100);
+    const numSkips = targetCount - numLikes;
+    // e.g. 10 swipes at 70% → 7 Like, 3 Skip. Only Skip and Like are used; never Super Like.
+    const swipeSequence = [];
+    for (let i = 0; i < numLikes; i++) swipeSequence.push('like');
+    for (let i = 0; i < numSkips; i++) swipeSequence.push('skip');
+    for (let i = swipeSequence.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [swipeSequence[i], swipeSequence[j]] = [swipeSequence[j], swipeSequence[i]];
+    }
+    let sessionCount = 0;
 
     const pickDelayMs = () => {
       const sec = randomBetween(
@@ -1081,22 +1114,29 @@
     };
 
     console.log(
-      `[AI Assistant] [Swipe] Activating auto-swipe on Discover – random delay ${safeMinSec}-${safeMaxSec}s between swipes, like ~${settings.swipeLikePercent}% of profiles.`
+      `[AI Assistant] [Swipe] Activating auto-swipe – total ${targetCount} swipes (${numLikes} Like, ${numSkips} Skip, ${likePct}% like), delay ${safeMinSec}-${safeMaxSec}s.`
     );
 
     const scheduleNext = () => {
       if (sessionAtStart !== swipeSessionId) return;
       if (!settings.swipeEnabled) return;
       if (!isDiscoverPage()) return;
+      if (sessionCount >= targetCount) {
+        console.log(`[AI Assistant] [Swipe] Reached ${targetCount} swipes for this session; stopping.`);
+        return;
+      }
 
+      const action = swipeSequence[sessionCount];
       const delayMs = pickDelayMs();
-      console.log(`[AI Assistant] [Swipe] Next swipe in ${Math.round(delayMs / 1000)}s`);
+      console.log(`[AI Assistant] [Swipe] Next swipe in ${Math.round(delayMs / 1000)}s (${sessionCount + 1}/${targetCount}) – ${action}`);
       swipeIntervalId = setTimeout(async () => {
         try {
-          await performSwipeTick(sessionAtStart);
+          await performSwipeTick(sessionAtStart, action);
+          sessionCount++;
+          if (sessionCount < targetCount) scheduleNext();
+          else console.log(`[AI Assistant] [Swipe] Reached ${targetCount} swipes for this session; stopping.`);
         } catch (err) {
           console.error('[AI Assistant] [Swipe] Error in swipe loop:', err);
-        } finally {
           scheduleNext();
         }
       }, delayMs);
@@ -1647,27 +1687,26 @@
   }
 
   /**
-   * Send messages to backend API and get AI reply
+   * Send messages to backend API and get AI reply.
+   * CTA timing: count "Sent" messages from the message list (GraphQL); when the next reply
+   * would be the N‑th sent message (N = ctaAfterMessages), request CTA after the natural reply.
    */
-  async function generateAIReply(messages, turnCount, ctaSent) {
+  async function generateAIReply(messages, ctaSent) {
     try {
       const ctaEnabled = settings.ctaEnabled !== false;
-      // CTA timing is controlled by settings.ctaAfterMessages:
-      // turnCount is how many messages we have ALREADY sent.
-      // We want to trigger CTA on the N‑th message the user configured,
-      // so we base the check on the *next* message number (turnCount + 1).
+      // Count "Sent" messages from GraphQL (messages from extractMessages() are GraphQL cache; isOutgoing = Sent).
+      const sentCount = messages.filter(m => m.isOutgoing).length;
+      const nextSentCount = sentCount + 1; // The reply we are about to send
       const ctaAfter = Number.isFinite(settings.ctaAfterMessages) ? settings.ctaAfterMessages : 3;
-      const nextTurnCount = turnCount + 1;
       let shouldRequestCTA = false;
       if (ctaEnabled && !ctaSent) {
         if (ctaAfter <= 0) {
-          // 0 means "allow anytime": first eligible reply can be CTA.
           shouldRequestCTA = true;
         } else {
-          shouldRequestCTA = nextTurnCount >= ctaAfter;
+          shouldRequestCTA = nextSentCount >= ctaAfter;
         }
       }
-      console.log(`[AI Assistant] CTA check: turnCount=${turnCount}, nextTurnCount=${nextTurnCount}, ctaAfter=${ctaAfter}, ctaSent=${ctaSent}, shouldRequestCTA=${shouldRequestCTA}`);
+      console.log(`[AI Assistant] CTA check: Sent count from GraphQL=${sentCount}, next reply=${nextSentCount}, ctaAfter=${ctaAfter}, ctaSent=${ctaSent}, shouldRequestCTA=${shouldRequestCTA}`);
 
       const partnerName = getPartnerDisplayName();
       // Send FULL chat history (not limited) with explicit direction labels
@@ -1679,9 +1718,7 @@
           isOutgoing: m.isOutgoing,
           direction: m.isOutgoing ? 'sent' : 'received' // Explicit label for AI context
         })),
-        // Send the turn count that includes the reply we are about to send,
-        // so the backend knows how many messages we've sent in total.
-        turnCount: nextTurnCount,
+        turnCount: nextSentCount,
         requestCTA: shouldRequestCTA,
         partnerName: partnerName || undefined,
         // Include social handles for CTA customization
@@ -1865,7 +1902,7 @@
               floatingButton.textContent = '🤖 Generating greeting...';
               floatingButton.classList.add('match-ai-reply-button--processing');
             }
-            const greeting = await generateAIReply([], 0, false);
+            const greeting = await generateAIReply([], false);
             if (!isAutoSessionActive(session)) return;
             await new Promise(r => setTimeout(r, getRandomDelay()));
             if (!isAutoSessionActive(session)) return;
@@ -2320,13 +2357,13 @@
         console.log(`[AI Assistant] ✅ Last message is INCOMING ("${lastMessage.text.substring(0, 50)}...") - proceeding with reply`);
       }
       
-      const { turnCount, ctaSent } = await getTurnCount(currentConversationId);
+      const { ctaSent } = await getTurnCount(currentConversationId);
       if (!isAutoSessionActive(session)) return;
+      const sentCount = messages.filter(m => m.isOutgoing).length;
+      console.log('[AI Assistant] Generating reply for', messages.length, 'messages, Sent count from GraphQL:', sentCount);
       
-      console.log('[AI Assistant] Generating reply for', messages.length, 'messages, turn:', turnCount);
-      
-      // Generate AI reply
-      const reply = await generateAIReply(messages, turnCount, ctaSent);
+      // Generate AI reply (CTA timing uses Sent count from GraphQL)
+      const reply = await generateAIReply(messages, ctaSent);
       console.log('[AI Assistant] Got reply:', reply);
       if (!isAutoSessionActive(session)) return;
       
@@ -2607,8 +2644,8 @@
         return;
       }
 
-      const { turnCount, ctaSent } = await getTurnCount(currentConversationId);
-      const reply = await generateAIReply(messages, turnCount, ctaSent);
+      const { ctaSent } = await getTurnCount(currentConversationId);
+      const reply = await generateAIReply(messages, ctaSent);
       
       insertReplyIntoInput(reply);
       await incrementTurnCount(currentConversationId);
